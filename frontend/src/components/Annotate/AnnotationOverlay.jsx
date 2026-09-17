@@ -1,4 +1,4 @@
-import { useRef, useState, useLayoutEffect, useCallback } from "react";
+import { useRef, useState, useLayoutEffect, useCallback, Fragment } from "react";
 import { useDocument } from "../../store/useDocument";
 
 /*
@@ -321,7 +321,7 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
   const boxRef = useRef(null);
   const taRef = useRef(null);
   const [px, setPx] = useState(a.fontSize || 14);
-  // Edit-line boxes: on the very first focus, select the whole line so the
+    // Edit-line boxes: on the very first focus, select the whole line so the
   // first keystroke replaces it — "editing the line as it is", not appending
   // to a visible copy. Later clicks still place the cursor where you click.
   const firstFocus = useRef(true);
