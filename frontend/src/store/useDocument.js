@@ -29,6 +29,11 @@ function fromBackend(a) {
     shape: a.shape ?? undefined,
     fontSize: a.font_size ?? undefined,
     bold: a.bold ?? false,
+    italic: a.italic ?? false,
+    font: a.font || undefined,
+    // User's explicit font-palette pick (CSS family). Wins over the
+    // auto-detected document font for cover edits.
+    fontFamily: a.font_family || undefined,
     align: a.align ?? undefined,
     w: a.w ?? undefined,
     h: a.h ?? undefined,
@@ -51,6 +56,9 @@ function toBackend(a) {
     shape: a.shape ?? null,
     font_size: a.fontSize ?? null,
     bold: a.bold ?? false,
+    italic: a.italic ?? false,
+    font: a.font ?? null,
+    font_family: a.fontFamily ?? null,
     align: a.align ?? null,
     w: a.w ?? null,
     h: a.h ?? null,
@@ -83,7 +91,7 @@ export const useDocument = create((set, get) => ({
   tool: "select", // active annotation tool
   shape: "rect", // active shape when tool === "shape"
   color: "#0f6b62", // active color
-  textStyle: { fontSize: 14, bold: false, align: "left" },
+  textStyle: { fontSize: 14, bold: false, align: "left", fontFamily: "Helvetica"},
   annotations: [], // staged annotation objects, PDF-space coords
   selectedId: null,
   annotationsDirty: false, // true once something changed since the last save/load

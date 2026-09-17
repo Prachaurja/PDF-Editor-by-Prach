@@ -30,15 +30,30 @@ def extract_text_lines(path: Path, page_index: int) -> list[dict]:
                 bbox = line.get("bbox")
                 if not bbox:
                     continue
-                size = spans[0].get("size", 11)
-                font = (spans[0].get("font") or "").lower()
-                bold = "bold" in font
+                # Use the DOMINANT span (most characters) rather than the first
+                # one, so a mixed line (e.g. a bold lead-in) reports the font
+                # of the line's body. The font name + style are returned so the
+                # frontend can render the editable line — and the export can
+                # draw the replacement — in the SAME typeface as the document.
+                dom = max(spans, key=lambda s: len(s.get("text", "")))
+                size = dom.get("size", 11)
+                font = dom.get("font") or ""
+                font_l = font.lower()
+                bold = "bold" in font_l
+                italic = "italic" in font_l or "oblique" in font_l
+                # Text color (0xRRGGBB int from PyMuPDF) as a hex string, so
+                # the editable line matches the original — colored headings
+                # shouldn't turn black when edited.
+                color_hex = f"#{dom.get('color', 0):06x}"
                 lines.append(
                     {
                         "bbox": [round(v, 2) for v in bbox],
                         "text": text,
                         "font_size": round(size, 1),
                         "bold": bold,
+                        "italic": italic,
+                        "font": font,
+                        "color": color_hex,
                     }
                 )
         return lines

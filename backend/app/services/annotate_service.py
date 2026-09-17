@@ -31,6 +31,57 @@ def _hex_to_rgb(hex_color: str) -> tuple[float, float, float]:
         return (0.06, 0.42, 0.38)  # fall back to the app green
 
 
+_BUILTIN_FAMILIES = {
+    "times": {"": "tiro", "b": "tibo", "i": "tibi", "bi": "tibl"},
+    "courier": {"": "cour", "b": "cobo", "i": "cori", "bi": "cobi"},
+    # Note: "hebo" is Helvetica-*Oblique*, not Helvetica-Bold — the correct
+    # bold name is "hebi". (That mix-up is why bold lines used to be
+    # exported slanted.)
+    "helv": {"": "helv", "b": "hebi", "i": "heli", "bi": "hebo"},
+}
+
+# Hints for classifying a font name (PDF font name or a CSS family from the
+# toolbar palette). Keep these in sync with the FONT list on the frontend —
+# note "Century Gothic" is SANS (no "century" hint), while "Book Antiqua"
+# and "Palatino Linotype" are serif.
+_SERIF_HINTS = ("times", "tiro", "rome", "garamond", "georgia", "serif",
+                "palatino", "cambria", "antiqua", "baskerville",
+                "bookman", "schoolbook")
+_MONO_HINTS = ("courier", "consolas", "console", "mono")
+
+
+def _family_class(name: str) -> str:
+    """Classify a font name (PDF font name or CSS family) as times/courier/helv."""
+    n = name.lower()
+    if any(h in n for h in _SERIF_HINTS):
+        return "times"
+    if any(h in n for h in _MONO_HINTS):
+        return "courier"
+    return "helv"  # Helvetica/Arial/sans, or anything we don't recognize
+
+
+def _pick_font(bold: bool, italic: bool,
+               pdf_font: str | None = None,
+               css_family: str | None = None) -> str:
+    """Pick the built-in PDF font for a text annotation.
+
+    Priority:
+    1. `css_family` — the user's explicit font-palette pick (e.g. "Georgia").
+       It wins so an intentional choice is never silently overridden.
+    2. `pdf_font` — the PDF font name of the clicked line (cover edits);
+       matching the document's family/weight/italic is what makes an edited
+       line blend in instead of standing out as Helvetica.
+    3. Fall back to the Helvetica family.
+    """
+    if css_family:
+        fam = _family_class(css_family)
+    elif pdf_font:
+        fam = _family_class(pdf_font)
+    else:
+        fam = "helv"
+    return _BUILTIN_FAMILIES[fam][("b" if bold else "") + ("i" if italic else "")]
+
+
 def _new_output_path() -> tuple[str, Path]:
     file_id = uuid.uuid4().hex
     return file_id, PROCESSED_DIR / f"{file_id}.pdf"
@@ -213,7 +264,12 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
             elif ann.type == "text" and ann.x is not None and ann.y is not None:
                 fs = ann.font_size or 14
                 text = ann.text or ""
-                fontname = "hebo" if ann.bold else "helv"
+                # Font choice: an explicit font-palette pick (ann.font_family)
+                # wins; otherwise cover edits match the clicked line's
+                # original font; otherwise Helvetica family.
+                fontname = _pick_font(
+                    ann.bold, ann.italic, pdf_font=ann.font, css_family=ann.font_family
+                )
                 align_map = {
                     "left": fitz.TEXT_ALIGN_LEFT,
                     "center": fitz.TEXT_ALIGN_CENTER,

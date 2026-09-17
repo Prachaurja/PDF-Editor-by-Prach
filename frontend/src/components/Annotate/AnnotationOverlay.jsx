@@ -7,6 +7,19 @@ import { useDocument } from "../../store/useDocument";
  * zoom and rotation. Text boxes are draggable HTML; shapes/marks are SVG.
  */
 
+/* Map a PDF font name (of the clicked line) to a CSS font stack so the
+ * editable line uses the SAME typeface as the document. Without this, the
+ * line was rendered in the app's UI font (Inter) while the document is e.g.
+ * Times — which made edited lines look like a foreign box pasted over the
+ * text. Returns undefined for unknown fonts so the app default applies. */
+function cssFontFor(pdfFont) {
+  const f = (pdfFont || "").toLowerCase();
+  if (!f) return undefined;
+  if (/times|tiro|rome|garamond|book/.test(f)) return '"Times New Roman", Times, serif';
+  if (/courier|mono/.test(f)) return '"Courier New", Courier, monospace';
+  return '"Helvetica Neue", Helvetica, Arial, sans-serif';
+}
+
 export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
@@ -60,7 +73,10 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         addAnnotation({
           type: "text",
           page: currentPage,
-          color: "#1a1a1a",
+          // Match the original line's ink color (colored headings stay
+          // colored — it was hardcoded near-black before, which made the
+          // "copied" line visibly different from the real one).
+          color: best.color || "#1a1a1a",
           x: best.bbox[0],
           y: best.bbox[1],
           w: best.bbox[2] - best.bbox[0],
@@ -68,6 +84,11 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
           text: best.text,
           fontSize: Math.round(fs),
           bold: !!best.bold,
+          italic: !!best.italic,
+          // Original line's PDF font name — the textarea is rendered with a
+          // matching CSS font (cssFontFor) and the export draws the
+          // replacement with the matching built-in PDF font.
+          font: best.font || undefined,
           align: "left",
           cover: true,
           editing: true,
@@ -95,6 +116,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         type: "text", page: currentPage, color,
         x: px, y: py, w: 180, h: 40, text: "",
         fontSize: textStyle.fontSize, bold: textStyle.bold, align: textStyle.align,
+        fontFamily: textStyle.fontFamily,
         editing: true,
       });
       return;
@@ -205,33 +227,54 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         const [lx, ly] = pdfToPct(a.x, a.y);
         const wPct = ((a.w || 180) / pdfWidth) * 100;
         return (
-          <TextBox
-            key={a.id} a={a} lx={lx} ly={ly} wPct={wPct}
-            pdfWidth={pdfWidth}
-            selected={a.id === selectedId}
-            selectTool={tool === "select"}
-            onSelect={() => selectAnnotation(a.id)}
-            onChange={(text) => updateAnnotation(a.id, { text })}
-            onEditDone={() => updateAnnotation(a.id, { editing: false })}
-            onDelete={() => deleteAnnotation(a.id)}
-            startDrag={(e) => {
-              if (tool !== "select") return;
-              const rect = ref.current.getBoundingClientRect();
-              // record where in the box the grab happened, in screen px
-              const boxX = (lx / 100) * rect.width;
-              const boxY = (ly / 100) * rect.height;
-              setDrag({
-                id: a.id,
-                grabX: e.clientX - rect.x - boxX,
-                grabY: e.clientY - rect.y - boxY,
-              });
-              selectAnnotation(a.id);
-            }}
-            startResize={(e) => {
-              setResize({ id: a.id, startClientX: e.clientX, startW: a.w || 180 });
-            }}
-            onHeightChange={(h) => updateAnnotation(a.id, { h })}
-          />
+          <Fragment key={a.id}>
+            {/* For edit-line (cover) annotations: a white patch sized to the
+                ORIGINAL line's frozen bbox — no bigger, no smaller. It hides
+                exactly the line being edited and nothing else. On a white
+                page it's invisible, which is what makes the line look like it
+                is itself editable in place (no box, no shadow, no border).
+                The text box on top is chromeless and may grow downward if
+                the replacement wraps to extra lines — same as the export. */}
+            {a.cover && a.rects && a.rects[0] && (
+              <div
+                className="cover-patch"
+                style={(() => {
+                  const b = rectToBox(a.rects[0]);
+                  return {
+                    left: `${b.left}%`, top: `${b.top}%`,
+                    width: `${b.width}%`, height: `${b.height}%`,
+                  };
+                })()}
+              />
+            )}
+            <TextBox
+              a={a} lx={lx} ly={ly} wPct={wPct}
+              pdfWidth={pdfWidth}
+              selected={a.id === selectedId}
+              selectTool={tool === "select"}
+              onSelect={() => selectAnnotation(a.id)}
+              onChange={(text) => updateAnnotation(a.id, { text })}
+              onEditDone={() => updateAnnotation(a.id, { editing: false })}
+              onDelete={() => deleteAnnotation(a.id)}
+              startDrag={(e) => {
+                if (tool !== "select") return;
+                const rect = ref.current.getBoundingClientRect();
+                // record where in the box the grab happened, in screen px
+                const boxX = (lx / 100) * rect.width;
+                const boxY = (ly / 100) * rect.height;
+                setDrag({
+                  id: a.id,
+                  grabX: e.clientX - rect.x - boxX,
+                  grabY: e.clientY - rect.y - boxY,
+                });
+                selectAnnotation(a.id);
+              }}
+              startResize={(e) => {
+                setResize({ id: a.id, startClientX: e.clientX, startW: a.w || 180 });
+              }}
+              onHeightChange={(h) => updateAnnotation(a.id, { h })}
+            />
+          </Fragment>
         );
       })}
 
@@ -278,6 +321,10 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
   const boxRef = useRef(null);
   const taRef = useRef(null);
   const [px, setPx] = useState(a.fontSize || 14);
+  // Edit-line boxes: on the very first focus, select the whole line so the
+  // first keystroke replaces it — "editing the line as it is", not appending
+  // to a visible copy. Later clicks still place the cursor where you click.
+  const firstFocus = useRef(true);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -325,10 +372,19 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
     width: `${wPct}%`,
     color: a.color,
     fontSize: `${px}px`,
+    // Font priority: an explicit font-palette pick (a.fontFamily) wins;
+    // otherwise cover edits auto-match the document's own typeface so an
+    // edited line looks native; otherwise the app default applies.
+    fontFamily: a.fontFamily || cssFontFor(a.font),
     fontWeight: a.bold ? 700 : 400,
+    fontStyle: a.italic ? "italic" : "normal",
     textAlign: a.align || "left",
     cursor: selectTool ? "move" : "text",
-    background: a.cover ? "#ffffff" : "transparent",
+    // No background on the box itself. For edit-line (cover) annotations a
+    // separate .cover-patch div — sized to the original line exactly — hides
+    // the old text. That's what makes it look like the line itself is
+    // editable in place instead of a white box sitting on top of it.
+    background: "transparent",
   };
 
   return (
@@ -347,7 +403,13 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
         value={a.text}
         placeholder="Type here"
         autoFocus={a.editing}
-        onFocus={onSelect}
+        onFocus={() => {
+          onSelect();
+          if (a.cover && firstFocus.current) {
+            firstFocus.current = false;
+            requestAnimationFrame(() => taRef.current?.select());
+          }
+        }}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onEditDone}
         onMouseDown={(e) => { if (!selectTool) e.stopPropagation(); }}
@@ -357,7 +419,11 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
           textAlign: "inherit",
           color: "inherit",
           fontSize: "inherit",
-          lineHeight: 1.2,
+          // 1.0 (not 1.2): the box top sits exactly on the original line's
+          // ascender top, and line-height 1.2 was centering the glyphs
+          // ~0.1em lower than where the original text sat — which is why
+          // the replacement looked shifted on top of the old line.
+          lineHeight: 1,
         }}
       />
       {selected && (

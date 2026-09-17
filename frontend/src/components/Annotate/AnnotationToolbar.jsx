@@ -30,6 +30,38 @@ const COLORS = [
   "#c0392b", "#3a6ea5", "#5b4b8a", "#1a1a1a", "#6b6862",
 ];
 
+/* Font palette for text boxes — everyday fonts, grouped. Web-safe families
+ * so the preview renders them on any machine; on export the backend draws
+ * the closest built-in PDF font of the same class (serif -> Times,
+ * monospace -> Courier, else Helvetica) in your bold/italic choice. Pick
+ * any of these and both the live view and the exported PDF follow. */
+const FONTS = [
+  {
+    group: "Sans-serif",
+    list: [
+      "Arial", "Arial Black", "Calibri", "Trebuchet MS", "Verdana",
+      "Tahoma", "Helvetica", "Lucida Sans", "Franklin Gothic",
+      "Century Gothic", "Segoe UI",
+    ],
+  },
+  {
+    group: "Serif",
+    list: [
+      "Times New Roman", "Georgia", "Garamond", "Cambria",
+      "Palatino Linotype", "Book Antiqua",
+    ],
+  },
+  {
+    group: "Monospace",
+    list: ["Courier New", "Consolas", "Lucida Console"],
+  },
+  {
+    group: "Display",
+    list: ["Comic Sans MS", "Impact"],
+  },
+];
+
+
 export default function AnnotationToolbar() {
   const {
     doc, tool, shape, setTool, setShape, color, setColor,
@@ -110,14 +142,24 @@ export default function AnnotationToolbar() {
       {showText && (
         <>
           <div className="annot-sep" />
-          <div className="text-props">
-            <button
-              className={`text-btn ${textStyle.bold ? "active" : ""}`}
-              title="Bold"
-              onClick={() => setTextStyle({ bold: !textStyle.bold })}
-            >
-              <b>B</b>
-            </button>
+         <div className="text-props">
+          <select
+            className="font-select"
+            value={textStyle.fontFamily}
+            title="Font"
+            onChange={(e) => setTextStyle({ fontFamily: e.target.value })}
+          >
+            {FONTS.map((f) => (
+              <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+            ))}
+          </select>
+          <button
+            className={`text-btn ${textStyle.bold ? "active" : ""}`}
+            title="Bold"
+            onClick={() => setTextStyle({ bold: !textStyle.bold })}
+          >
+            <b>B</b>
+          </button>      
             <select
               className="size-select"
               value={textStyle.fontSize}

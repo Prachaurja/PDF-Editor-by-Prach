@@ -827,6 +827,16 @@ button {
   font-size: 13px;
   padding: 0 4px;
 }
+.font-select {
+  height: 28px;
+  max-width: 122px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 0 4px;
+}
 .align-group { display: flex; gap: 2px; margin-left: 2px; }
 
 /* Text box annotation */
@@ -897,15 +907,34 @@ button {
   transform: scale(1.15);
 }
 
-/* Text box that covers/replaces existing PDF text (click-to-edit line) */
+/* Edit-existing-line ("cover") annotations — the line edits IN PLACE.
+   The white patch is a separate element sized to the ORIGINAL line's bbox
+   (see .cover-patch below); the text box on top has no chrome at all, so on
+   a white page nothing is visible except the text itself. Hover/selected
+   show only a faint dashed hint that the line is editable — no box. */
+   .cover-patch {
+    position: absolute;
+    z-index: 5;
+    background: #fff;
+  }
 .text-box.cover {
-  border: 1px solid var(--border);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  border-radius: 2px;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+  min-height: 0;
 }
-.text-box.cover:hover,
+.text-box.cover textarea {
+  min-height: 1em;
+  padding: 0;
+}
+.text-box.cover:hover {
+  outline: 1px dashed rgba(15, 107, 98, 0.35);
+  outline-offset: 2px;
+}
 .text-box.cover.selected {
-  border-color: var(--accent);
+  outline: 1px dashed rgba(15, 107, 98, 0.65);
+  outline-offset: 2px;
 }
 
 /* Toast confirmation */

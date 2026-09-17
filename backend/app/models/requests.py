@@ -52,6 +52,15 @@ class Annotation(BaseModel):
     # text box styling + size
     font_size: Optional[float] = None
     bold: bool = False
+    italic: bool = False
+    # Original line's PDF font name, for cover edits — the export draws the
+    # replacement in a matching base font so it blends into the document.
+    font: Optional[str] = None
+    # User's explicit font-palette pick (a CSS family name like "Georgia").
+    # When present it wins over the auto-detected document font; the export
+    # maps it to the closest built-in PDF font of the same class.
+    font_family: Optional[str] = None
+    font_family: Optional[str] = None
     align: Optional[str] = None
     w: Optional[float] = None
     h: Optional[float] = None
