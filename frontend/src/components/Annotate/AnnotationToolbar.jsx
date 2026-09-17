@@ -61,10 +61,20 @@ const FONTS = [
   },
 ];
 
+const LINE_WIDTHS = [1, 2, 3, 4];
+const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra Thick" };
+const HIGHLIGHT_OPACITIES = [0.15, 0.3, 0.5];
+const HIGHLIGHT_OPACITY_LABEL = { 0.15: "Light", 0.3: "Medium", 0.5: "Strong" };
+const STAMP_LABELS = ["APPROVED", "REJECTED", "CONFIDENTIAL", "DRAFT", "PENDING"];
+
+
 export default function AnnotationToolbar() {
   const {
     doc, tool, shape, setTool, setShape, color, setColor,
     textStyle, setTextStyle, selectedId, annotations,
+    lineWidth, setLineWidth,
+    highlightOpacity, setHighlightOpacity,
+    stampLabel, setStampLabel,
   } = useDocument();
   const [shapeOpen, setShapeOpen] = useState(false);
 
@@ -73,6 +83,14 @@ export default function AnnotationToolbar() {
   const selected = annotations.find((a) => a.id === selectedId);
   const showText = tool === "text" || (selected && selected.type === "text");
   const activeShape = SHAPES.find((s) => s.id === shape) || SHAPES[0];
+  // Thickness picker: visible for the stroke tools, or when a drawn
+  // stroke/shape is selected (so you can re-thicken a mark you drew).
+  const showWidth =
+    tool === "pen" || tool === "shape" ||
+    (selected && ["pen", "line", "arrow", "shape", "rect"].includes(selected.type));
+  // Opacity picker: visible for the Highlight tool or a selected highlight.
+  const showOpacity =
+    tool === "highlight" || (selected && selected.type === "highlight");
 
   return (
     <div className="annot-toolbar">
@@ -138,11 +156,66 @@ export default function AnnotationToolbar() {
         </label>
       </div>
 
+      {showWidth && (
+        <>
+          <div className="annot-sep" />
+          <div className="width-group" title="Line thickness">
+            {LINE_WIDTHS.map((w) => (
+              <button
+                key={w}
+                className={`width-btn ${lineWidth === w ? "active" : ""}`}
+                title={LINE_WIDTH_LABEL[w]}
+                onClick={() => setLineWidth(w)}
+              >
+                <span className="width-sample" style={{ height: w }} />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {showOpacity && (
+        <>
+          <div className="annot-sep" />
+          <div className="opacity-group" title="Highlight opacity">
+            {HIGHLIGHT_OPACITIES.map((o) => (
+              <button
+                key={o}
+                className={`opacity-btn ${Math.abs(highlightOpacity - o) < 0.001 ? "active" : ""}`}
+                title={HIGHLIGHT_OPACITY_LABEL[o]}
+                onClick={() => setHighlightOpacity(o)}
+              >
+                <span
+                  className="opacity-sample"
+                  style={{ background: `rgba(230, 194, 0, ${o})` }}
+                />
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tool === "stamp" && (
+        <>
+          <div className="annot-sep" />
+          <select
+            className="stamp-select"
+            value={stampLabel}
+            title="Stamp text"
+            onChange={(e) => setStampLabel(e.target.value)}
+          >
+            {STAMP_LABELS.map((l) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+        </>
+      )}  
+
       {showText && (
         <>
           <div className="annot-sep" />
           <div className="text-props">
-          <select
+         <select
             className="font-select"
             value={textStyle.fontFamily}
             title="Font"
@@ -169,10 +242,17 @@ export default function AnnotationToolbar() {
           >
             <b>B</b>
           </button>
+          <button
+            className={`text-btn ${textStyle.italic ? "active" : ""}`}
+            title="Italic"
+            onClick={() => setTextStyle({ italic: !textStyle.italic })}
+          >
+            <i className="italic-glyph">I</i>
+          </button>
             <select
               className="size-select"
               value={textStyle.fontSize}
-              title="Font size"
+              title="Font Size"
               onChange={(e) => setTextStyle({ fontSize: Number(e.target.value) })}
             >
               {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((s) => (
