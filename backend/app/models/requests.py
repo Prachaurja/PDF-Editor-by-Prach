@@ -63,6 +63,8 @@ class Annotation(BaseModel):
     align: Optional[str] = None
     w: Optional[float] = None
     h: Optional[float] = None
+    # highlight fill opacity (0-1); None = the app default of 0.3
+    opacity: Optional[float] = Field(None, ge=0.01, le=1.0)
     # when true (only meaningful for type == "text"): paint an opaque white
     # patch behind the text first, so it visually replaces existing PDF
     # content rather than overlaying on top of it
