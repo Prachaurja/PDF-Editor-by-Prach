@@ -60,7 +60,6 @@ class Annotation(BaseModel):
     # When present it wins over the auto-detected document font; the export
     # maps it to the closest built-in PDF font of the same class.
     font_family: Optional[str] = None
-    font_family: Optional[str] = None
     align: Optional[str] = None
     w: Optional[float] = None
     h: Optional[float] = None

@@ -61,7 +61,6 @@ const FONTS = [
   },
 ];
 
-
 export default function AnnotationToolbar() {
   const {
     doc, tool, shape, setTool, setShape, color, setColor,
@@ -142,15 +141,25 @@ export default function AnnotationToolbar() {
       {showText && (
         <>
           <div className="annot-sep" />
-         <div className="text-props">
+          <div className="text-props">
           <select
             className="font-select"
             value={textStyle.fontFamily}
             title="Font"
             onChange={(e) => setTextStyle({ fontFamily: e.target.value })}
           >
-            {FONTS.map((f) => (
-              <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+            {/* FONTS is a list of GROUPS ({ group, list }) — each group
+                becomes an <optgroup> and each font an <option>. Mapping the
+                groups directly as <option> children makes React throw
+                "Objects are not valid as a React child" and takes down the
+                whole app (this is what closed the PDF on Text Box /
+                Edit Existing Text clicks). */}
+            {FONTS.map((g) => (
+              <optgroup key={g.group} label={g.group}>
+                {g.list.map((f) => (
+                  <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <button
@@ -159,7 +168,7 @@ export default function AnnotationToolbar() {
             onClick={() => setTextStyle({ bold: !textStyle.bold })}
           >
             <b>B</b>
-          </button>      
+          </button>
             <select
               className="size-select"
               value={textStyle.fontSize}
