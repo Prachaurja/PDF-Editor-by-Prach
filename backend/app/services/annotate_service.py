@@ -212,7 +212,8 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                     rect = fitz.Rect(r)
                     shape = page.new_shape()
                     shape.draw_rect(rect)
-                    shape.finish(color=None, fill=color, fill_opacity=0.3)
+                    # strong); older marks without it keep the 0.3 default
+                    shape.finish(color=None, fill=color, fill_opacity=ann.opacity or 0.3)
                     shape.commit()
 
             elif ann.type == "underline" and ann.rects:
