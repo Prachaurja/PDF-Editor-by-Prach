@@ -1,0 +1,467 @@
+import { useRef, useState, useLayoutEffect, useCallback } from "react";
+import { useDocument } from "../../store/useDocument";
+
+/*
+ * Overlay layer matching the rendered page image. Draws in screen pixels,
+ * stores in PDF points (origin top-left, y down), so annotations survive
+ * zoom and rotation. Text boxes are draggable HTML; shapes/marks are SVG.
+ */
+
+export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
+  const {
+    tool, shape, color, textStyle, annotations, selectedId, currentPage,
+    addAnnotation, updateAnnotation, selectAnnotation, deleteAnnotation,
+    getPageLines,
+  } = useDocument();
+
+  const ref = useRef(null);
+  const [draft, setDraft] = useState(null);
+  const [drag, setDrag] = useState(null); // dragging an existing text box
+  const [resize, setResize] = useState(null); // resizing a text box's width
+
+  const toScreen = useCallback((e) => {
+    const rect = ref.current.getBoundingClientRect();
+    return { x: e.clientX - rect.x, y: e.clientY - rect.y, rect };
+  }, []);
+
+  const screenToPdf = useCallback((sx, sy, rect) => {
+    const nx = sx / rect.width;
+    const ny = sy / rect.height;
+    let ux = nx, uy = ny;
+    if (pageEntry.rotation === 90) { ux = ny; uy = 1 - nx; }
+    else if (pageEntry.rotation === 180) { ux = 1 - nx; uy = 1 - ny; }
+    else if (pageEntry.rotation === 270) { ux = 1 - ny; uy = nx; }
+    return [ux * pdfWidth, uy * pdfHeight];
+  }, [pageEntry.rotation, pdfWidth, pdfHeight]);
+
+  const isTextBand = ["highlight", "underline", "strike"].includes(tool);
+
+  async function onPointerDown(e) {
+    if (tool === "select") return;
+    if (e.target.closest(".text-box")) return; // let text boxes handle themselves
+    e.preventDefault();
+    const { x, y, rect } = toScreen(e);
+
+    if (tool === "edit-line") {
+      const [px, py] = screenToPdf(x, y, rect);
+      const lines = await getPageLines(pageEntry.sourceIndex);
+      // hit-test against the click point; smallest matching line wins
+      let best = null, bestArea = Infinity;
+      for (const ln of lines) {
+        const [x0, y0, x1, y1] = ln.bbox;
+        const pad = 2;
+        if (px >= x0 - pad && px <= x1 + pad && py >= y0 - pad && py <= y1 + pad) {
+          const area = (x1 - x0) * (y1 - y0);
+          if (area < bestArea) { best = ln; bestArea = area; }
+        }
+      }
+      if (best) {
+        const fs = best.font_size || 12;
+        addAnnotation({
+          type: "text",
+          page: currentPage,
+          color: "#1a1a1a",
+          x: best.bbox[0],
+          y: best.bbox[1],
+          w: best.bbox[2] - best.bbox[0],
+          h: Math.max(best.bbox[3] - best.bbox[1], fs * 1.8 + 4),
+          text: best.text,
+          fontSize: Math.round(fs),
+          bold: !!best.bold,
+          align: "left",
+          cover: true,
+          editing: true,
+          // The ORIGINAL detected line's bbox, frozen at creation and never
+          // touched again (unlike x/y/w/h, which grow as the replacement
+          // text is typed). The backend uses this — not the current, maybe
+          // taller box — as the safe area to erase, so a longer replacement
+          // can only ever overlap the content below it, never delete it.
+          rects: [best.bbox],
+        });
+      }
+      return;
+    }
+
+    if (tool === "note" || tool === "stamp") {
+      const [px, py] = screenToPdf(x, y, rect);
+      const label = tool === "stamp" ? "APPROVED" : "Note";
+      addAnnotation({ type: tool, page: currentPage, color, x: px, y: py, text: label });
+      return;
+    }
+
+    if (tool === "text") {
+      const [px, py] = screenToPdf(x, y, rect);
+      addAnnotation({
+        type: "text", page: currentPage, color,
+        x: px, y: py, w: 180, h: 40, text: "",
+        fontSize: textStyle.fontSize, bold: textStyle.bold, align: textStyle.align,
+        editing: true,
+      });
+      return;
+    }
+
+    if (tool === "pen") { setDraft({ kind: "pen", pts: [[x, y]], rect }); return; }
+    if (isTextBand) { setDraft({ kind: "band", x0: x, y0: y, x1: x, y1: y, rect }); return; }
+    if (tool === "shape") { setDraft({ kind: "shape", shape, x0: x, y0: y, x1: x, y1: y, rect }); return; }
+  }
+
+  function onPointerMove(e) {
+    if (resize) {
+      const rect = ref.current.getBoundingClientRect();
+      const deltaScreen = e.clientX - resize.startClientX;
+      const deltaPdf = deltaScreen * (pdfWidth / rect.width);
+      const newW = Math.max(40, resize.startW + deltaPdf);
+      updateAnnotation(resize.id, { w: newW });
+      return;
+    }
+    if (drag) {
+      const { x, y, rect } = toScreen(e);
+      const [px, py] = screenToPdf(x - drag.grabX, y - drag.grabY, rect);
+      updateAnnotation(drag.id, { x: px, y: py });
+      return;
+    }
+    if (!draft) return;
+    const { x, y } = toScreen(e);
+    if (draft.kind === "pen") setDraft({ ...draft, pts: [...draft.pts, [x, y]] });
+    else setDraft({ ...draft, x1: x, y1: y });
+  }
+
+  function onPointerUp() {
+    if (resize) { setResize(null); return; }
+    if (drag) { setDrag(null); return; }
+    if (!draft) return;
+    const rect = draft.rect;
+
+    if (draft.kind === "pen" && draft.pts.length >= 2) {
+      const points = draft.pts.map(([sx, sy]) => screenToPdf(sx, sy, rect));
+      addAnnotation({ type: "pen", page: currentPage, color, points, width: 2 });
+    } else if (draft.kind === "band") {
+      const x0 = Math.min(draft.x0, draft.x1), y0 = Math.min(draft.y0, draft.y1);
+      const x1 = Math.max(draft.x0, draft.x1), y1 = Math.max(draft.y0, draft.y1);
+      if (Math.abs(x1 - x0) > 3 && Math.abs(y1 - y0) > 3) {
+        const [px0, py0] = screenToPdf(x0, y0, rect);
+        const [px1, py1] = screenToPdf(x1, y1, rect);
+        const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
+        addAnnotation({ type: tool, page: currentPage, color, rects: [r], width: 2 });
+      }
+    } else if (draft.kind === "shape") {
+      const [px0, py0] = screenToPdf(draft.x0, draft.y0, rect);
+      const [px1, py1] = screenToPdf(draft.x1, draft.y1, rect);
+      const dist = Math.hypot(draft.x1 - draft.x0, draft.y1 - draft.y0);
+      if (dist > 4) {
+        if (draft.shape === "line" || draft.shape === "arrow") {
+          addAnnotation({ type: draft.shape, page: currentPage, color, points: [[px0, py0], [px1, py1]], width: 2 });
+        } else {
+          const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
+          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: 2 });
+        }
+      }
+    }
+    setDraft(null);
+  }
+
+  const pageAnns = annotations.filter((a) => a.page === currentPage);
+
+  function pdfToPct(px, py) {
+    let nx = px / pdfWidth, ny = py / pdfHeight;
+    let dx = nx, dy = ny;
+    if (pageEntry.rotation === 90) { dx = 1 - ny; dy = nx; }
+    else if (pageEntry.rotation === 180) { dx = 1 - nx; dy = 1 - ny; }
+    else if (pageEntry.rotation === 270) { dx = ny; dy = 1 - nx; }
+    return [dx * 100, dy * 100];
+  }
+
+  function rectToBox(r) {
+    const [a, b] = pdfToPct(r[0], r[1]);
+    const [c, d] = pdfToPct(r[2], r[3]);
+    return { left: Math.min(a, c), top: Math.min(b, d), width: Math.abs(c - a), height: Math.abs(d - b) };
+  }
+
+  const cursor = tool === "select" ? "default" : "crosshair";
+
+  return (
+    <div
+      ref={ref}
+      className="annot-overlay"
+      style={{ cursor }}
+      onMouseDown={onPointerDown}
+      onMouseMove={onPointerMove}
+      onMouseUp={onPointerUp}
+      onMouseLeave={() => { if (draft) onPointerUp(); if (drag) setDrag(null); if (resize) setResize(null); }}
+    >
+      <svg className="annot-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+        {pageAnns.map((a) => (
+          <AnnotShape
+            key={a.id} a={a} selected={a.id === selectedId}
+            rectToBox={rectToBox} pdfToPct={pdfToPct}
+            onSelect={() => tool === "select" && selectAnnotation(a.id)}
+          />
+        ))}
+        {draft && <DraftShape draft={draft} color={color} tool={tool} />}
+      </svg>
+
+      {/* Text boxes (draggable, editable) */}
+      {pageAnns.filter((a) => a.type === "text").map((a) => {
+        const [lx, ly] = pdfToPct(a.x, a.y);
+        const wPct = ((a.w || 180) / pdfWidth) * 100;
+        return (
+          <TextBox
+            key={a.id} a={a} lx={lx} ly={ly} wPct={wPct}
+            pdfWidth={pdfWidth}
+            selected={a.id === selectedId}
+            selectTool={tool === "select"}
+            onSelect={() => selectAnnotation(a.id)}
+            onChange={(text) => updateAnnotation(a.id, { text })}
+            onEditDone={() => updateAnnotation(a.id, { editing: false })}
+            onDelete={() => deleteAnnotation(a.id)}
+            startDrag={(e) => {
+              if (tool !== "select") return;
+              const rect = ref.current.getBoundingClientRect();
+              // record where in the box the grab happened, in screen px
+              const boxX = (lx / 100) * rect.width;
+              const boxY = (ly / 100) * rect.height;
+              setDrag({
+                id: a.id,
+                grabX: e.clientX - rect.x - boxX,
+                grabY: e.clientY - rect.y - boxY,
+              });
+              selectAnnotation(a.id);
+            }}
+            startResize={(e) => {
+              setResize({ id: a.id, startClientX: e.clientX, startW: a.w || 180 });
+            }}
+            onHeightChange={(h) => updateAnnotation(a.id, { h })}
+          />
+        );
+      })}
+
+      {/* Notes & stamps as HTML labels */}
+      {pageAnns.filter((a) => a.type === "note" || a.type === "stamp").map((a) => {
+        const [lx, ly] = pdfToPct(a.x, a.y);
+        return (
+          <div
+            key={`lbl-${a.id}`}
+            className={`annot-label ${a.type} ${a.id === selectedId ? "selected" : ""}`}
+            style={{ left: `${lx}%`, top: `${ly}%`, borderColor: a.color, color: a.color }}
+            onMouseDown={(e) => { e.stopPropagation(); if (tool === "select") selectAnnotation(a.id); }}
+          >
+            {a.type === "stamp" ? a.text || "APPROVED" : a.text || "Note"}
+            {a.id === selectedId && (
+              <button className="mini-del" onMouseDown={(e) => { e.stopPropagation(); deleteAnnotation(a.id); }}>×</button>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Delete affordance for a selected svg annotation */}
+      {selectedId != null && (() => {
+        const a = pageAnns.find((x) => x.id === selectedId);
+        if (!a || a.type === "text" || a.type === "note" || a.type === "stamp") return null;
+        let anchor;
+        if (a.rects) anchor = rectToBox(a.rects[0]);
+        else if (a.points) { const [l, t] = pdfToPct(a.points[1][0], a.points[1][1]); anchor = { left: l, top: t, width: 0, height: 0 }; }
+        else return null;
+        return (
+          <button
+            className="annot-delete"
+            style={{ left: `${anchor.left + anchor.width}%`, top: `${anchor.top}%` }}
+            onMouseDown={(e) => { e.stopPropagation(); deleteAnnotation(selectedId); }}
+            title="Delete"
+          >×</button>
+        );
+      })()}
+    </div>
+  );
+}
+
+function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, onChange, onEditDone, onDelete, startDrag, startResize, onHeightChange }) {
+  const boxRef = useRef(null);
+  const taRef = useRef(null);
+  const [px, setPx] = useState(a.fontSize || 14);
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return;
+    const parent = el.offsetParent;
+    if (!parent) return;
+    const recompute = () => {
+      const renderedPageWidth = parent.getBoundingClientRect().width;
+      const ratio = renderedPageWidth / pdfWidth;
+      setPx((a.fontSize || 14) * ratio);
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(parent);
+    return () => ro.disconnect();
+  }, [a.fontSize, pdfWidth]);
+
+  // Auto-grow the textarea height to fit its content, AND feed that height
+  // back into the stored annotation (in PDF points). Without this, typing
+  // more text than the originally-detected line's height can hold still
+  // *looks* fine on screen (the box visually grows) but the export uses the
+  // old, too-short height — PyMuPDF silently drops text that overflows its
+  // box, which is why edited lines could vanish after Save/Export.
+  useLayoutEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+
+    const parent = boxRef.current?.offsetParent;
+    if (parent && onHeightChange) {
+      const renderedPageWidth = parent.getBoundingClientRect().width;
+      const ratio = pdfWidth / renderedPageWidth; // pdf points per screen px
+      const newHPdf = ta.scrollHeight * ratio;
+      // small tolerance avoids redundant writes/re-renders on sub-pixel jitter
+      if (!a.h || Math.abs(newHPdf - a.h) > 0.5) {
+        onHeightChange(newHPdf);
+      }
+    }
+  }, [a.text, px, wPct]);
+
+  const style = {
+    left: `${lx}%`,
+    top: `${ly}%`,
+    width: `${wPct}%`,
+    color: a.color,
+    fontSize: `${px}px`,
+    fontWeight: a.bold ? 700 : 400,
+    textAlign: a.align || "left",
+    cursor: selectTool ? "move" : "text",
+    background: a.cover ? "#ffffff" : "transparent",
+  };
+
+  return (
+    <div
+      ref={boxRef}
+      className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""}`}
+      style={style}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        if (selectTool) startDrag(e);
+        else onSelect();
+      }}
+    >
+      <textarea
+        ref={taRef}
+        value={a.text}
+        placeholder="Type here"
+        autoFocus={a.editing}
+        onFocus={onSelect}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={onEditDone}
+        onMouseDown={(e) => { if (!selectTool) e.stopPropagation(); }}
+        rows={1}
+        style={{
+          fontWeight: "inherit",
+          textAlign: "inherit",
+          color: "inherit",
+          fontSize: "inherit",
+          lineHeight: 1.2,
+        }}
+      />
+      {selected && (
+        <>
+          <button className="mini-del" onMouseDown={(e) => { e.stopPropagation(); onDelete(); }}>×</button>
+          <div
+            className="text-resize-handle"
+            title="Drag to resize width"
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              startResize(e);
+            }}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
+  const stroke = a.color;
+  const selStyle = selected ? { filter: "drop-shadow(0 0 1.5px rgba(0,0,0,0.4))" } : {};
+  const click = { onMouseDown: onSelect, style: { cursor: "pointer", ...selStyle } };
+
+  if (a.type === "highlight" && a.rects) {
+    const b = rectToBox(a.rects[0]);
+    return <rect x={b.left} y={b.top} width={b.width} height={b.height} rx="0" fill={stroke} fillOpacity={0.3} {...click} />;
+  }
+  if ((a.type === "underline" || a.type === "strike") && a.rects) {
+    const b = rectToBox(a.rects[0]);
+    const y = a.type === "underline" ? b.top + b.height : b.top + b.height / 2;
+    return <line x1={b.left} y1={y} x2={b.left + b.width} y2={y} stroke={stroke} strokeWidth={selected ? 1 : 0.6} vectorEffect="non-scaling-stroke" {...click} />;
+  }
+  if (a.type === "pen" && a.points) {
+    const pts = a.points.map((p) => pdfToPct(p[0], p[1]).join(",")).join(" ");
+    return <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" {...click} />;
+  }
+  if ((a.type === "line" || a.type === "arrow") && a.points) {
+    const [x1, y1] = pdfToPct(a.points[0][0], a.points[0][1]);
+    const [x2, y2] = pdfToPct(a.points[1][0], a.points[1][1]);
+    return (
+      <g {...click}>
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />
+        {a.type === "arrow" && <Arrowhead x1={x1} y1={y1} x2={x2} y2={y2} color={stroke} />}
+      </g>
+    );
+  }
+  if (a.type === "shape" && a.rects) {
+    const b = rectToBox(a.rects[0]);
+    return <ShapeGlyph shape={a.shape} b={b} stroke={stroke} click={click} />;
+  }
+  return null;
+}
+
+function ShapeGlyph({ shape, b, stroke, click }) {
+  const common = { fill: "none", stroke, strokeWidth: 1, vectorEffect: "non-scaling-stroke", ...click };
+  const { left: x, top: y, width: w, height: h } = b;
+  const cx = x + w / 2, cy = y + h / 2;
+  if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...common} />;
+  if (shape === "ellipse") return <ellipse cx={cx} cy={cy} rx={w / 2} ry={h / 2} {...common} />;
+  if (shape === "triangle") return <polygon points={`${cx},${y} ${x + w},${y + h} ${x},${y + h}`} {...common} />;
+  if (shape === "diamond") return <polygon points={`${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} {...common} />;
+  if (shape === "star") return <polygon points={starPoints(cx, cy, w / 2, h / 2)} {...common} />;
+  if (shape === "check") return <polyline points={`${x},${cy} ${x + w * 0.4},${y + h} ${x + w},${y}`} {...common} />;
+  if (shape === "cross") return <g {...click}><line x1={x} y1={y} x2={x + w} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /><line x1={x + w} y1={y} x2={x} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /></g>;
+  return <rect x={x} y={y} width={w} height={h} {...common} />;
+}
+
+function starPoints(cx, cy, rx, ry) {
+  const pts = [];
+  for (let i = 0; i < 10; i++) {
+    const ang = (Math.PI / 5) * i - Math.PI / 2;
+    const r = i % 2 === 0 ? 1 : 0.42;
+    pts.push(`${cx + Math.cos(ang) * rx * r},${cy + Math.sin(ang) * ry * r}`);
+  }
+  return pts.join(" ");
+}
+
+function Arrowhead({ x1, y1, x2, y2, color }) {
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const len = 2.4;
+  const a1 = angle + Math.PI - 0.4, a2 = angle + Math.PI + 0.4;
+  return <polyline points={`${x2 + len * Math.cos(a1)},${y2 + len * Math.sin(a1)} ${x2},${y2} ${x2 + len * Math.cos(a2)},${y2 + len * Math.sin(a2)}`} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />;
+}
+
+function DraftShape({ draft, color, tool }) {
+  const rect = draft.rect;
+  const pct = (sx, sy) => [(sx / rect.width) * 100, (sy / rect.height) * 100];
+  if (draft.kind === "pen") {
+    const pts = draft.pts.map(([x, y]) => pct(x, y).join(",")).join(" ");
+    return <polyline points={pts} fill="none" stroke={color} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />;
+  }
+  const [x0, y0] = pct(draft.x0, draft.y0);
+  const [x1, y1] = pct(draft.x1, draft.y1);
+  if (draft.kind === "shape") {
+    if (draft.shape === "line" || draft.shape === "arrow") {
+      return <g><line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />{draft.shape === "arrow" && <Arrowhead x1={x0} y1={y0} x2={x1} y2={y1} color={color} />}</g>;
+    }
+    const b = { left: Math.min(x0, x1), top: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
+    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} click={{}} />;
+  }
+  const left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  const fill = tool === "highlight" ? color : "none";
+  const opacity = tool === "highlight" ? 0.3 : 1;
+  return <rect x={left} y={top} width={w} height={h} fill={fill} fillOpacity={opacity} stroke={color} strokeWidth={tool === "highlight" ? 0 : 1} strokeDasharray="2,1" vectorEffect="non-scaling-stroke" />;
+}

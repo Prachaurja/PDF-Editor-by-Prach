@@ -1,0 +1,28 @@
+# ---- Slice 1: core API, view, thumbnails (installed & working) ----
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+PyMuPDF==1.24.10          # fitz: render, pages, edit, annotate, redact, compress
+pydantic==2.9.2
+
+# ---- Later slices: uncomment as you build each one ----
+# pydantic-settings==2.5.2
+# aiofiles==24.1.0
+
+# Slice 2 (pages) & 5 (forms) & 6 (security): merge/split, forms, encryption
+# pypdf==5.0.1
+
+# Slice 7 (convert)
+# pdf2docx==0.5.8         # PDF -> Word
+# pdf2image==1.17.0       # PDF -> images (system dep: poppler-utils)
+# Pillow==10.4.0
+# LibreOffice headless    # (system install) Word/Excel/etc -> PDF
+
+# Slice 8 (OCR)
+# pytesseract==0.3.13     # system dep: tesseract-ocr
+
+# Slice 9 (signatures)
+# pyhanko==0.25.1
+
+# Dev/test
+# httpx==0.27.2           # for TestClient

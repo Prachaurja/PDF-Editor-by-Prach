@@ -1,0 +1,65 @@
+from pydantic import BaseModel, Field
+
+
+class PageOp(BaseModel):
+    """One entry in the staged page plan.
+
+    The plan is an ordered list of the pages the output should contain,
+    each referencing a page in the SOURCE document by its original index,
+    plus an accumulated rotation. Deletion is expressed by omission:
+    a source page with no entry in the plan is dropped.
+    """
+
+    source_index: int = Field(..., ge=0, description="0-based page index in the original document")
+    rotation: int = Field(0, description="Clockwise rotation in degrees: 0, 90, 180, or 270")
+
+
+class ApplyPlanRequest(BaseModel):
+    plan: list[PageOp] = Field(..., description="Ordered pages for the output document")
+
+
+class MergeRequest(BaseModel):
+    """Merge another already-uploaded document after a given position."""
+
+    other_file_id: str
+    after_index: int = Field(-1, description="Insert after this output position; -1 = prepend at start")
+
+
+# ---- Slice 3: annotations ----
+
+from typing import Literal, Optional
+
+
+class Annotation(BaseModel):
+    """One annotation, positioned in PDF-space (points, origin top-left)."""
+
+    type: Literal[
+        "highlight", "underline", "strike", "pen", "rect", "arrow", "line",
+        "note", "stamp", "shape", "text",
+    ]
+    page: int = Field(..., ge=0, description="0-based page index this annotation belongs to")
+    color: str = Field("#0f6b62", description="Hex color")
+
+    rects: Optional[list[list[float]]] = None
+    points: Optional[list[list[float]]] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    text: Optional[str] = None
+    width: float = 2.0
+
+    # shape kind when type == "shape"
+    shape: Optional[str] = None
+    # text box styling + size
+    font_size: Optional[float] = None
+    bold: bool = False
+    align: Optional[str] = None
+    w: Optional[float] = None
+    h: Optional[float] = None
+    # when true (only meaningful for type == "text"): paint an opaque white
+    # patch behind the text first, so it visually replaces existing PDF
+    # content rather than overlaying on top of it
+    cover: bool = False
+
+
+class ApplyAnnotationsRequest(BaseModel):
+    annotations: list[Annotation]

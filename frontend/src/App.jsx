@@ -1,0 +1,44 @@
+import { useDocument } from "./store/useDocument";
+import Toolbar from "./components/Toolbar/Toolbar";
+import AnnotationToolbar from "./components/Annotate/AnnotationToolbar";
+import ThumbnailRail from "./components/Sidebar/ThumbnailRail";
+import PageCanvas from "./components/Viewer/PageCanvas";
+import CommentsPanel from "./components/Annotate/CommentsPanel";
+import Dropzone from "./components/Dropzone";
+import StatusBar from "./components/StatusBar";
+import SplitBanner from "./components/SplitBanner";
+import Toast from "./components/Toast";
+
+export default function App() {
+  const { doc, loading } = useDocument();
+
+  return (
+    <div className="app">
+      <Toolbar />
+      {doc && <AnnotationToolbar />}
+      <SplitBanner />
+      <div className="workspace">
+        {doc ? (
+          <>
+            <ThumbnailRail />
+            <PageCanvas />
+            <CommentsPanel />
+          </>
+        ) : loading ? (
+          <div className="dropzone">
+            <div style={{ textAlign: "center" }}>
+              <span className="spinner" />
+              <p style={{ marginTop: 12, color: "var(--ink-soft)" }}>
+                Loading document...
+              </p>
+            </div>
+          </div>
+        ) : (
+          <Dropzone />
+        )}
+      </div>
+      <StatusBar />
+      <Toast />
+    </div>
+  );
+}
