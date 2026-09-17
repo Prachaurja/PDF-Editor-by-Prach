@@ -37,6 +37,7 @@ function fromBackend(a) {
     align: a.align ?? undefined,
     w: a.w ?? undefined,
     h: a.h ?? undefined,
+    opacity: a.opacity ?? undefined,
     cover: a.cover ?? false,
     createdAt: a.created_at || new Date().toISOString(),
   };
@@ -62,6 +63,7 @@ function toBackend(a) {
     align: a.align ?? null,
     w: a.w ?? null,
     h: a.h ?? null,
+    opacity: a.opacity ?? null,
     cover: a.cover ?? false,
     created_at: a.createdAt || null,
   };
@@ -91,7 +93,11 @@ export const useDocument = create((set, get) => ({
   tool: "select", // active annotation tool
   shape: "rect", // active shape when tool === "shape"
   color: "#0f6b62", // active color
-  textStyle: { fontSize: 14, bold: false, align: "left", fontFamily: "Helvetica"},
+  textStyle: { fontSize: 14, bold: false, italic: false, align: "left", fontFamily: "Helvetica" },
+  lineWidth: 2, // pen/shape/line/arrow thickness, PDF points (1-4)
+  highlightOpacity: 0.3, // highlight fill opacity (0.15 light / 0.3 medium / 0.5 strong)
+  stampLabel: "APPROVED", // label the Stamp tool applies
+  zoom: 1, // page zoom factor (0.5 - 2)
   annotations: [], // staged annotation objects, PDF-space coords
   selectedId: null,
   annotationsDirty: false, // true once something changed since the last save/load
@@ -100,7 +106,7 @@ export const useDocument = create((set, get) => ({
   pageLines: {}, // cache: source page index -> extracted text lines, for click-to-edit
 
   async load(file) {
-    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {} });
+    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {}, zoom: 1 });
     try {
       const doc = await uploadDocument(file);
       // restore any editable annotation layer saved for this document
@@ -283,6 +289,52 @@ export const useDocument = create((set, get) => ({
       return { color };
     });
   },
+  // Line thickness for pen/shape/line/arrow. Like color, it also patches
+  // the currently selected (line-type) annotation so you can re-thicken a
+  // mark you already drew.
+  setLineWidth(width) {
+    set((s) => {
+      if (s.selectedId) {
+        const annotations = s.annotations.map((a) =>
+          a.id === s.selectedId && ["pen", "line", "arrow", "shape", "rect"].includes(a.type)
+            ? { ...a, width }
+            : a
+        );
+        return { lineWidth: width, annotations, annotationsDirty: true };
+      }
+      return { lineWidth: width };
+    });
+  },
+
+  // Highlight fill opacity. Also patches a selected highlight.
+  setHighlightOpacity(opacity) {
+    set((s) => {
+      if (s.selectedId) {
+        const annotations = s.annotations.map((a) =>
+          a.id === s.selectedId && a.type === "highlight" ? { ...a, opacity } : a
+        );
+        return { highlightOpacity: opacity, annotations, annotationsDirty: true };
+      }
+      return { highlightOpacity: opacity };
+    });
+  },
+
+  setStampLabel(label) {
+    set({ stampLabel: label });
+  },
+
+  // ---- viewer zoom (0.5 - 2) ----
+  zoomIn() {
+    set((s) => ({ zoom: Math.min(2, Math.round((s.zoom + 0.25) * 100) / 100) }));
+  },
+
+  zoomOut() {
+    set((s) => ({ zoom: Math.max(0.5, Math.round((s.zoom - 0.25) * 100) / 100) }));
+  },
+
+  zoomFit() {
+    set({ zoom: 1 });
+  },
 
   addAnnotation(ann) {
     const id = annotationSeq++;
@@ -380,6 +432,7 @@ export const useDocument = create((set, get) => ({
       selectedId: null,
       tool: "select",
       annotationsDirty: false,
+      zoom: 1,
     });
   },
 }));
