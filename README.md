@@ -5,7 +5,7 @@ Built slice by slice — Slice 1 (upload, view, thumbnails) is done and working.
 
 ## Backend
 
-    cd ~/Downloads/PDF-Editor/backend
+    cd ~/Documents/PROJECTS/PDF-Editor/backend
     rm -rf .venv
     /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12 -m venv .venv
     source .venv/bin/activate
