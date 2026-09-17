@@ -190,7 +190,6 @@ button {
   overflow: auto;
   background: var(--field);
   display: flex;
-  justify-content: center;
   align-items: flex-start;
   padding: 32px;
 }
@@ -199,7 +198,7 @@ button {
   background: #fff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 6px 24px rgba(0, 0, 0, 0.06);
   border-radius: 2px;
-  max-width: 100%;
+  margin: 0 auto; /* centered when it fits; scrollable (no clipping) when zoomed */
 }
 
 .page-sheet img {
@@ -305,6 +304,41 @@ button {
 .pager button:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+/* Zoom controls (status bar) */
+.zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 12px;
+}
+.zoom-btn,
+.zoom-val {
+  min-width: 26px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.zoom-btn {
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.zoom-btn:hover:not(:disabled) {
+  background: var(--field);
+  color: var(--ink);
+}
+.zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.zoom-val:hover {
+  background: var(--field);
+  color: var(--ink);
 }
 
 .spinner {
@@ -817,6 +851,73 @@ button {
 }
 .text-btn:hover { background: var(--field); color: var(--ink); }
 .text-btn.active { background: var(--accent-soft); color: var(--accent); }
+.italic-glyph {
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+/* Line-thickness picker (pen / shapes / lines / arrows) */
+.width-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.width-btn {
+  width: 24px;
+  height: 26px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.width-btn:hover { background: var(--field); }
+.width-btn.active { background: var(--accent-soft); }
+.width-sample {
+  display: block;
+  width: 14px;
+  background: var(--ink);
+  border-radius: 1px;
+}
+.width-btn.active .width-sample {
+  background: var(--accent);
+}
+
+/* Highlight opacity picker */
+.opacity-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.opacity-btn {
+  width: 24px;
+  height: 26px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.opacity-btn:hover { background: var(--field); }
+.opacity-btn.active { background: var(--accent-soft); }
+.opacity-sample {
+  display: block;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+/* Stamp label picker */
+.stamp-select {
+  height: 28px;
+  max-width: 122px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  padding: 0 4px;
+}
 .size-select {
   height: 28px;
   border: 1px solid var(--border);
