@@ -24,7 +24,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
     addAnnotation, updateAnnotation, selectAnnotation, deleteAnnotation,
-    getPageLines,
+    getPageLines,  lineWidth, highlightOpacity, stampLabel, 
   } = useDocument();
 
   const ref = useRef(null);
@@ -105,7 +105,8 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
 
     if (tool === "note" || tool === "stamp") {
       const [px, py] = screenToPdf(x, y, rect);
-      const label = tool === "stamp" ? "APPROVED" : "Note";
+      // Stamp label is picked in the toolbar (APPROVED, REJECTED, ...)
+      const label = tool === "stamp" ? stampLabel : "Note";
       addAnnotation({ type: tool, page: currentPage, color, x: px, y: py, text: label });
       return;
     }
@@ -115,7 +116,8 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
       addAnnotation({
         type: "text", page: currentPage, color,
         x: px, y: py, w: 180, h: 40, text: "",
-        fontSize: textStyle.fontSize, bold: textStyle.bold, align: textStyle.align,
+        fontSize: textStyle.fontSize, bold: textStyle.bold,
+        italic: textStyle.italic, align: textStyle.align,
         fontFamily: textStyle.fontFamily,
         editing: true,
       });
@@ -123,7 +125,33 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
     }
 
     if (tool === "pen") { setDraft({ kind: "pen", pts: [[x, y]], rect }); return; }
-    if (isTextBand) { setDraft({ kind: "band", x0: x, y0: y, x1: x, y1: y, rect }); return; }
+    if (isTextBand) {
+      // SNAP to the clicked text line (when the pointer starts on one):
+      // the band's vertical extent becomes the line's own bbox. This makes
+      // the highlighter behave like a real highlighter — a natural
+      // HORIZONTAL swipe across a line highlights that line. (Before, the
+      // finish guard required > 3px of movement in BOTH axes, so a normal
+      // horizontal swipe — the way everyone highlights — silently produced
+      // nothing, and vertical drags made near-invisible slivers.)
+      // On empty space lineBox stays null and classic 2D box-drawing applies.
+      let lineBox = null;
+      const canSnap = pageEntry.rotation === 0 || pageEntry.rotation === 180;
+      if (canSnap) {
+        const [px, py] = screenToPdf(x, y, rect);
+        const lines = await getPageLines(pageEntry.sourceIndex);
+        let bestArea = Infinity;
+        for (const ln of lines) {
+          const [bx0, by0, bx1, by1] = ln.bbox;
+          const pad = 2;
+          if (px >= bx0 - pad && px <= bx1 + pad && py >= by0 - pad && py <= by1 + pad) {
+            const area = (bx1 - bx0) * (by1 - by0);
+            if (area < bestArea) { lineBox = ln.bbox; bestArea = area; }
+          }
+        }
+      }
+      setDraft({ kind: "band", x0: x, y0: y, x1: x, y1: y, rect, lineBox });
+      return;
+    }
     if (tool === "shape") { setDraft({ kind: "shape", shape, x0: x, y0: y, x1: x, y1: y, rect }); return; }
   }
 
@@ -156,15 +184,38 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
 
     if (draft.kind === "pen" && draft.pts.length >= 2) {
       const points = draft.pts.map(([sx, sy]) => screenToPdf(sx, sy, rect));
-      addAnnotation({ type: "pen", page: currentPage, color, points, width: 2 });
+      addAnnotation({ type: "pen", page: currentPage, color, points, width: lineWidth });
     } else if (draft.kind === "band") {
       const x0 = Math.min(draft.x0, draft.x1), y0 = Math.min(draft.y0, draft.y1);
       const x1 = Math.max(draft.x0, draft.x1), y1 = Math.max(draft.y0, draft.y1);
-      if (Math.abs(x1 - x0) > 3 && Math.abs(y1 - y0) > 3) {
+      const dragged = Math.max(x1 - x0, y1 - y0) > 3;
+      const extra = tool === "highlight" ? { opacity: highlightOpacity } : {};
+
+      if (draft.lineBox) {
+        // Snapped to a text line: the vertical extent is the line's own
+        // bbox (always a visible line height), the horizontal extent is
+        // your swipe — clamped to the line. A plain click (no real drag)
+        // highlights the WHOLE line.
+        const [lx0, ly0, lx1, ly1] = draft.lineBox;
+        let rx0, rx1;
+        if (!dragged) {
+          rx0 = lx0; rx1 = lx1;
+        } else {
+          const [ax, ay] = screenToPdf(x0, y0, rect);
+          const [bx, by] = screenToPdf(x1, y1, rect);
+          rx0 = Math.max(lx0, Math.min(ax, bx));
+          rx1 = Math.min(lx1, Math.max(ax, bx));
+          if (rx1 - rx0 < 8) { rx0 = lx0; rx1 = lx1; } // tiny swipe = whole line
+        }
+        addAnnotation({ type: tool, page: currentPage, color, rects: [[rx0, ly0, rx1, ly1]], width: lineWidth, ...extra });
+      } else if (dragged) {
+        // No text line under the pointer (empty space): classic 2D box.
+        // "dragged" only requires ONE axis to exceed 3px — a vertical box
+        // drag on empty space used to be rejected too.
         const [px0, py0] = screenToPdf(x0, y0, rect);
         const [px1, py1] = screenToPdf(x1, y1, rect);
         const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
-        addAnnotation({ type: tool, page: currentPage, color, rects: [r], width: 2 });
+        addAnnotation({ type: tool, page: currentPage, color, rects: [r], width: lineWidth, ...extra });
       }
     } else if (draft.kind === "shape") {
       const [px0, py0] = screenToPdf(draft.x0, draft.y0, rect);
@@ -172,10 +223,10 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
       const dist = Math.hypot(draft.x1 - draft.x0, draft.y1 - draft.y0);
       if (dist > 4) {
         if (draft.shape === "line" || draft.shape === "arrow") {
-          addAnnotation({ type: draft.shape, page: currentPage, color, points: [[px0, py0], [px1, py1]], width: 2 });
+          addAnnotation({ type: draft.shape, page: currentPage, color, points: [[px0, py0], [px1, py1]], width: lineWidth });
         } else {
           const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
-          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: 2 });
+          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: lineWidth });
         }
       }
     }
@@ -219,7 +270,13 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
             onSelect={() => tool === "select" && selectAnnotation(a.id)}
           />
         ))}
-        {draft && <DraftShape draft={draft} color={color} tool={tool} />}
+       {draft && (
+          <DraftShape
+            draft={draft} color={color} tool={tool}
+            lineWidth={lineWidth} opacity={highlightOpacity}
+            lineBoxScreen={draft.lineBox ? rectToBox(draft.lineBox) : null}
+          />
+        )}
       </svg>
 
       {/* Text boxes (draggable, editable) */}
@@ -451,36 +508,39 @@ function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
 
   if (a.type === "highlight" && a.rects) {
     const b = rectToBox(a.rects[0]);
-    return <rect x={b.left} y={b.top} width={b.width} height={b.height} rx="0" fill={stroke} fillOpacity={0.3} {...click} />;
+    return <rect x={b.left} y={b.top} width={b.width} height={b.height} rx="0" fill={stroke} fillOpacity={a.opacity ?? 0.3} {...click} />;
   }
   if ((a.type === "underline" || a.type === "strike") && a.rects) {
     const b = rectToBox(a.rects[0]);
     const y = a.type === "underline" ? b.top + b.height : b.top + b.height / 2;
     return <line x1={b.left} y1={y} x2={b.left + b.width} y2={y} stroke={stroke} strokeWidth={selected ? 1 : 0.6} vectorEffect="non-scaling-stroke" {...click} />;
   }
+ // Preview stroke width: the stored value is in PDF points; 0.7 keeps the
+  // old 2pt -> 1.4px look as the "regular" default.
+  const strokeW = (a.width || 2) * 0.7; 
   if (a.type === "pen" && a.points) {
     const pts = a.points.map((p) => pdfToPct(p[0], p[1]).join(",")).join(" ");
-    return <polyline points={pts} fill="none" stroke={stroke} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" {...click} />;
+    return <polyline points={pts} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" {...click} />;
   }
   if ((a.type === "line" || a.type === "arrow") && a.points) {
     const [x1, y1] = pdfToPct(a.points[0][0], a.points[0][1]);
     const [x2, y2] = pdfToPct(a.points[1][0], a.points[1][1]);
     return (
       <g {...click}>
-        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={strokeW} vectorEffect="non-scaling-stroke" />
         {a.type === "arrow" && <Arrowhead x1={x1} y1={y1} x2={x2} y2={y2} color={stroke} />}
       </g>
     );
   }
   if (a.type === "shape" && a.rects) {
     const b = rectToBox(a.rects[0]);
-    return <ShapeGlyph shape={a.shape} b={b} stroke={stroke} click={click} />;
+    return <ShapeGlyph shape={a.shape} b={b} stroke={stroke} click={click} strokeWidth={strokeW} />;
   }
   return null;
 }
 
-function ShapeGlyph({ shape, b, stroke, click }) {
-  const common = { fill: "none", stroke, strokeWidth: 1, vectorEffect: "non-scaling-stroke", ...click };
+function ShapeGlyph({ shape, b, stroke, click, strokeWidth = 1 }) {
+  const common = { fill: "none", stroke, strokeWidth, vectorEffect: "non-scaling-stroke", ...click };
   const { left: x, top: y, width: w, height: h } = b;
   const cx = x + w / 2, cy = y + h / 2;
   if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...common} />;
@@ -510,24 +570,36 @@ function Arrowhead({ x1, y1, x2, y2, color }) {
   return <polyline points={`${x2 + len * Math.cos(a1)},${y2 + len * Math.sin(a1)} ${x2},${y2} ${x2 + len * Math.cos(a2)},${y2 + len * Math.sin(a2)}`} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />;
 }
 
-function DraftShape({ draft, color, tool }) {
+function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxScreen = null }) {
   const rect = draft.rect;
   const pct = (sx, sy) => [(sx / rect.width) * 100, (sy / rect.height) * 100];
+  const draftW = (lineWidth || 2) * 0.7;
   if (draft.kind === "pen") {
     const pts = draft.pts.map(([x, y]) => pct(x, y).join(",")).join(" ");
-    return <polyline points={pts} fill="none" stroke={color} strokeWidth={1.4} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />;
+    return <polyline points={pts} fill="none" stroke={color} strokeWidth={draftW} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />;
   }
   const [x0, y0] = pct(draft.x0, draft.y0);
   const [x1, y1] = pct(draft.x1, draft.y1);
   if (draft.kind === "shape") {
     if (draft.shape === "line" || draft.shape === "arrow") {
-      return <g><line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />{draft.shape === "arrow" && <Arrowhead x1={x0} y1={y0} x2={x1} y2={y1} color={color} />}</g>;
+      return <g><line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth={draftW} vectorEffect="non-scaling-stroke" />{draft.shape === "arrow" && <Arrowhead x1={x0} y1={y0} x2={x1} y2={y1} color={color} />}</g>;
     }
     const b = { left: Math.min(x0, x1), top: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
-    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} click={{}} />;
+    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} click={{}} strokeWidth={draftW} />;
   }
-  const left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  let left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
+  if (lineBoxScreen) {
+    // Snapped-band preview: the line's vertical extent, the swipe's
+    // horizontal extent (clamped to the line) — shows exactly what will
+    // be created on release.
+    left = Math.max(lineBoxScreen.left, Math.min(x0, x1));
+    const right = Math.min(lineBoxScreen.left + lineBoxScreen.width, Math.max(x0, x1));
+    w = Math.max(right - left, 0.5);
+    top = lineBoxScreen.top;
+    h = lineBoxScreen.height;
+  }
   const fill = tool === "highlight" ? color : "none";
-  const opacity = tool === "highlight" ? 0.3 : 1;
-  return <rect x={left} y={top} width={w} height={h} fill={fill} fillOpacity={opacity} stroke={color} strokeWidth={tool === "highlight" ? 0 : 1} strokeDasharray="2,1" vectorEffect="non-scaling-stroke" />;
+  // highlight uses the chosen opacity; other bands are fully opaque
+  const fillOpacity = tool === "highlight" ? opacity : 1;
+  return <rect x={left} y={top} width={w} height={h} fill={fill} fillOpacity={fillOpacity} stroke={color} strokeWidth={tool === "highlight" ? 0 : draftW} strokeDasharray="2,1" vectorEffect="non-scaling-stroke" />;
 }
