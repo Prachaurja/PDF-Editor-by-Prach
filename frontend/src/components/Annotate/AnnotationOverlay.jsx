@@ -20,6 +20,11 @@ function cssFontFor(pdfFont) {
   return '"Helvetica Neue", Helvetica, Arial, sans-serif';
 }
 
+// Bullet marker style: "round" | "open" | "square" | "dash" | "triangle" |
+// "star". Older saved annotations sent a plain `true` — that reads as the
+// classic round dot.
+const normBullet = (v) => (v === true ? "round" : v || undefined);
+
 export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
@@ -552,7 +557,7 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, editOnClick,
   return (
     <div
       ref={boxRef}
-      className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""} ${a.bullet ? "bullet" : ""}`}
+      className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""} ${a.bullet ? `bullet bullet-${normBullet(a.bullet)}` : ""}`}
       style={style}
       title={editOnClick ? undefined : "Drag to move · Double-click to edit"}
       onMouseDown={(e) => {
