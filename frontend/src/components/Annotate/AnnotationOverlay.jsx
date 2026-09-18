@@ -24,7 +24,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
     addAnnotation, updateAnnotation, selectAnnotation, deleteAnnotation,
-    getPageLines, lineWidth, highlightOpacity, stampLabel, shapeFilled,
+    getPageLines, lineWidth, highlightOpacity, stampLabel, textBgColor,
   } = useDocument();
 
   const ref = useRef(null);
@@ -156,6 +156,12 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
           font: best.font || undefined,
           align: "left",
           cover: true,
+          // Color the patch paints over the old line. On a non-white page
+          // you pick a tone that matches the background (toolbar -> text
+          // background color), so the edited line blends in instead of
+          // sitting on a white sticker. "transparent" is impossible here —
+          // a redaction must paint something — so it falls back to white.
+          coverColor: textBgColor === "transparent" ? "#ffffff" : textBgColor,
           editing: true,
           // The ORIGINAL detected line's bbox, frozen at creation and never
           // touched again (unlike x/y/w/h, which grow as the replacement
@@ -182,8 +188,12 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         type: "text", page: currentPage, color,
         x: px, y: py, w: 180, h: 40, text: "",
         fontSize: textStyle.fontSize, bold: textStyle.bold,
-        italic: textStyle.italic, align: textStyle.align,
+        italic: textStyle.italic, bullet: textStyle.bullet,
+        align: textStyle.align,
         fontFamily: textStyle.fontFamily,
+        // A chosen background (toolbar -> text background color) becomes
+        // a visible tint behind the typed text; "transparent" = none.
+        bgColor: textBgColor === "transparent" ? undefined : textBgColor,
         editing: true,
       });
       return;
@@ -314,7 +324,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
           addAnnotation({ type: draft.shape, page: currentPage, color, points: [[px0, py0], [px1, py1]], width: lineWidth });
         } else {
           const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
-          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: lineWidth, filled: shapeFilled });
+          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: lineWidth });
         }
       }
     }
@@ -371,7 +381,6 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
             draft={draft} color={color} tool={tool}
             lineWidth={lineWidth} opacity={highlightOpacity}
             lineBoxScreen={draft.lineBox ? rectToBox(draft.lineBox) : null}
-            filled={shapeFilled}
           />
         )}
       </svg>
@@ -382,13 +391,13 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         const wPct = ((a.w || 180) / pdfWidth) * 100;
         return (
           <Fragment key={a.id}>
-            {/* For edit-line (cover) annotations: a white patch sized to the
+            {/* For edit-line (cover) annotations: a patch sized to the
                 ORIGINAL line's frozen bbox — no bigger, no smaller. It hides
                 exactly the line being edited and nothing else. On a white
-                page it's invisible, which is what makes the line look like it
-                is itself editable in place (no box, no shadow, no border).
-                The text box on top is chromeless and may grow downward if
-                the replacement wraps to extra lines — same as the export. */}
+                page with a white patch it's invisible, which is what makes
+                the line look editable in place. The text box on top is
+                chromeless and may grow downward if the replacement wraps
+                to extra lines — same as the export. */}
             {a.cover && a.rects && a.rects[0] && (
               <div
                 className="cover-patch"
@@ -397,6 +406,10 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
                   return {
                     left: `${b.left}%`, top: `${b.top}%`,
                     width: `${b.width}%`, height: `${b.height}%`,
+                    // The patch is painted with the line's own coverColor
+                    // (default white) — the same color the export's
+                    // redaction uses, so screen and PDF match.
+                    background: a.coverColor || "#ffffff",
                   };
                 })()}
               />
@@ -528,17 +541,18 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, editOnClick,
     // Grab cursor on every tool that moves the box; text cursor when the
     // click is meant to edit (Text tool).
     cursor: editOnClick ? "text" : "grab",
-    // No background on the box itself. For edit-line (cover) annotations a
-    // separate .cover-patch div — sized to the original line exactly — hides
-    // the old text. That's what makes it look like the line itself is
-    // editable in place instead of a white box sitting on top of it.
-    background: "transparent",
+    // Plain text boxes are chrome-less by default; a background chosen in
+    // the toolbar (a.bgColor) becomes a solid tint behind the typed text.
+    // For edit-line (cover) annotations a separate .cover-patch div — sized
+    // to the original line exactly, painted with a.coverColor — hides the
+    // old text; that's what makes the line look editable in place.
+    background: a.bgColor || "transparent",
   };
 
   return (
     <div
       ref={boxRef}
-      className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""}`}
+      className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""} ${a.bullet ? "bullet" : ""}`}
       style={style}
       title={editOnClick ? undefined : "Drag to move · Double-click to edit"}
       onMouseDown={(e) => {
@@ -730,7 +744,7 @@ function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
     const b = rectToBox(a.rects[0]);
     return (
       <g data-ann-id={a.id} {...click}>
-        <ShapeGlyph shape={a.shape} b={b} stroke={stroke} filled={!!a.filled} strokeWidth={strokeW} />
+        <ShapeGlyph shape={a.shape} b={b} stroke={stroke} strokeWidth={strokeW} />
         <ShapeHit shape={a.shape} b={b} />
       </g>
     );
@@ -762,10 +776,8 @@ function ShapeHit({ shape, b }) {
   return <rect x={x} y={y} width={w} height={h} {...hit} />;
 }
 
-function ShapeGlyph({ shape, b, stroke, filled, strokeWidth = 1 }) {
-  // Closed shapes can take a semi-transparent fill of their own color
-  // (the Fill toggle); open strokes (check/cross) stay outline-only.
-  const common = { fill: filled ? stroke : "none", fillOpacity: filled ? 0.25 : undefined, stroke, strokeWidth, vectorEffect: "non-scaling-stroke" };
+function ShapeGlyph({ shape, b, stroke, strokeWidth = 1 }) {
+  const common = { fill: "none", stroke, strokeWidth, vectorEffect: "non-scaling-stroke" };
   const { left: x, top: y, width: w, height: h } = b;
   const cx = x + w / 2, cy = y + h / 2;
   if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...common} />;
@@ -795,7 +807,7 @@ function Arrowhead({ x1, y1, x2, y2, color }) {
   return <polyline points={`${x2 + len * Math.cos(a1)},${y2 + len * Math.sin(a1)} ${x2},${y2} ${x2 + len * Math.cos(a2)},${y2 + len * Math.sin(a2)}`} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />;
 }
 
-function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxScreen = null, filled = false }) {
+function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxScreen = null }) {
   const rect = draft.rect;
   const pct = (sx, sy) => [(sx / rect.width) * 100, (sy / rect.height) * 100];
   const draftW = (lineWidth || 2) * 0.7;
@@ -810,7 +822,7 @@ function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxS
       return <g><line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth={draftW} vectorEffect="non-scaling-stroke" />{draft.shape === "arrow" && <Arrowhead x1={x0} y1={y0} x2={x1} y2={y1} color={color} />}</g>;
     }
     const b = { left: Math.min(x0, x1), top: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
-    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} filled={filled} strokeWidth={draftW} />;
+    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} strokeWidth={draftW} />;
   }
   let left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
   if (lineBoxScreen) {
