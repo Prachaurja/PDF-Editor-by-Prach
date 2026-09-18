@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useDocument } from "../../store/useDocument";
 
 const TOOLS = [
-  { id: "select", label: "Select", glyph: "\u2196" },
+  { id: "select", label: "Select (Esc)", glyph: "\u2196" },
   { id: "highlight", label: "Highlight", glyph: "\u258D" },
   { id: "strike", label: "Strikethrough", glyph: "S" },
   { id: "pen", label: "Pen", glyph: "\u270E" },
@@ -25,6 +25,8 @@ const SHAPES = [
   { id: "cross", label: "Cross", glyph: "\u2717" },
 ];
 
+// INK for the drawing tools (pen, highlight, shapes, lines, notes,
+// stamps). Text color is SEPARATE — see TEXT_COLORS / the "A" button.
 const COLORS = [
   "#0f6b62", "#127d5f", "#e6c200", "#e08a1e", "#a4443a",
   "#c0392b", "#3a6ea5", "#5b4b8a", "#1a1a1a", "#6b6862",
@@ -65,10 +67,20 @@ const LINE_WIDTHS = [1, 2, 3, 4];
 const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra thick" };
 const HIGHLIGHT_OPACITIES = [0.15, 0.3, 0.5];
 const HIGHLIGHT_OPACITY_LABEL = { 0.15: "Light", 0.3: "Medium", 0.5: "Strong" };
+
+// TEXT color palette — the "A" button in the text cluster. Fully separate
+// from the drawing-ink row above and from the background palette below, so
+// font color and background color are picked independently.
+const TEXT_COLORS = [
+  "#1a1a1a", "#ffffff", "#0f6b62", "#127d5f", "#e6c200", "#e08a1e",
+  "#a4443a", "#c0392b", "#3a6ea5", "#5b4b8a", "#6b6862",
+];
+
 // Background palette for Text box / Edit existing text. First entry = no
-// background. The light tones are meant to blend into non-white page
-// backgrounds (beige, gray, colored headers) so an edited line stops
-// looking like a white sticker on the page.
+// background. The light tones blend into non-white page backgrounds
+// (beige, gray, colored headers) so an edited line stops looking like a
+// white sticker; the drawing-ink palette is included too, so ANY color
+// can be used as a background.
 const BG_COLORS = [
   { id: "transparent", label: "None (no background)" },
   { id: "#ffffff", label: "White" },
@@ -79,7 +91,23 @@ const BG_COLORS = [
   { id: "#e3f2fd", label: "Pale blue" },
   { id: "#e8f5e9", label: "Pale green" },
   { id: "#fdecea", label: "Pale red" },
+  ...COLORS.map((c) => ({ id: c, label: c })),
 ];
+
+// Bullet marker styles. id = the value stored on the annotation (and
+// exported); glyph = what the preview and the style menu show.
+const BULLET_STYLES = [
+  { id: "round",    label: "Round dot",     glyph: "\u2022" },
+  { id: "open",     label: "Open circle",   glyph: "\u25E1" },
+  { id: "square",   label: "Square",        glyph: "\u25AA" },
+  { id: "dash",     label: "Dash",          glyph: "\u2013" },
+  { id: "triangle", label: "Triangle",      glyph: "\u25B8" },
+  { id: "star",     label: "Star",          glyph: "\u2605" },
+];
+const BULLET_GLYPH = Object.fromEntries(BULLET_STYLES.map((b) => [b.id, b.glyph]));
+// Older saved annotations sent `bullet: true` — normalize to "round".
+const normBullet = (v) => (v === true ? "round" : v || undefined);
+
 // "\u2714" / "\u2718" = standalone check / cross marks — placed with one
 // click (no drag) so you can tick any checkbox in the document. Drawn as
 // vectors on export (base PDF fonts have no glyph for them).
@@ -92,29 +120,67 @@ export default function AnnotationToolbar() {
     lineWidth, setLineWidth,
     highlightOpacity, setHighlightOpacity,
     stampLabel, setStampLabel,
-    textBgColor, setTextBgColor,
+    textBgColor, setTextBgColor, setTextColor,
     history, undo, redo,
   } = useDocument();
   const [shapeOpen, setShapeOpen] = useState(false);
   const [bgOpen, setBgOpen] = useState(false);
+  const [textColorOpen, setTextColorOpen] = useState(false);
+  const [bulletOpen, setBulletOpen] = useState(false);
 
-  // Keyboard shortcuts: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y
-  // redo. Textareas/inputs keep the browser's own text undo, so we stay
-  // out when one is focused.
+  // Each dropdown lives inside a ref that wraps its BUTTON and its MENU.
+  // Menus close on a mousedown OUTSIDE that wrapper (click-away) instead of
+  // on mouseleave — mouseleave is what made the color picker "disappear":
+  // the moment the pointer moved from the input to the OS color dialog
+  // (a separate window), the page fired mouseleave and unmounted the menu.
+  const shapeRef = useRef(null);
+  const bgRef = useRef(null);
+  const textColorRef = useRef(null);
+  const bulletRef = useRef(null);
+  const anyMenuOpen = shapeOpen || bgOpen || textColorOpen || bulletOpen;
+
+  // Open one menu, closing the others (so two popovers never overlap).
+  const openMenu = (which) => {
+    setShapeOpen(which === "shape");
+    setBgOpen(which === "bg");
+    setTextColorOpen(which === "text");
+    setBulletOpen(which === "bullet");
+  };
+
+  useEffect(() => {
+    if (!anyMenuOpen) return;
+    const onDown = (e) => {
+      const refs = [shapeRef.current, bgRef.current, textColorRef.current, bulletRef.current];
+      if (!refs.some((r) => r && r.contains(e.target))) openMenu("none");
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [anyMenuOpen]);
+
+  // Keyboard: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redo, Esc =
+  // close open menus and go back to Select (tools now stay armed after
+  // placement, so Esc is the quick way out). Textareas/inputs keep the
+  // browser's own handling while focused.
   useEffect(() => {
     const onKey = (e) => {
+      const t = e.target;
+      const inField = t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
+      if (e.key === "Escape" && !inField) {
+        openMenu("none");
+        setTool("select");
+        return;
+      }
       if (!(e.ctrlKey || e.metaKey)) return;
       const k = e.key.toLowerCase();
       if (k !== "z" && k !== "y") return;
-      const t = e.target;
-      if (t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable)) return;
+      if (inField) return;
       e.preventDefault();
       if (k === "y" || e.shiftKey) redo();
       else undo();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [undo, redo, setTool]);
 
   if (!doc) return null;
 
@@ -134,7 +200,10 @@ export default function AnnotationToolbar() {
   const effFont = selIsText ? selected.fontFamily || textStyle.fontFamily : textStyle.fontFamily;
   const effSize = selIsText ? selected.fontSize || textStyle.fontSize : textStyle.fontSize;
   const effAlign = selIsText ? selected.align || textStyle.align : textStyle.align;
-  const effBullet = selIsText ? !!selected.bullet : textStyle.bullet;
+  const effBullet = normBullet(selIsText ? selected.bullet : textStyle.bullet);
+  // TEXT color: selected box's own color, else the default ink for new
+  // boxes (the global `color`).
+  const effTextColor = selIsText ? selected.color : color;
   // Background: with a text box selected it reads THAT box (edited lines
   // store their patch color as coverColor, which is always a real color —
   // a redaction must paint something — so it never reads "transparent").
@@ -149,6 +218,8 @@ export default function AnnotationToolbar() {
   // Opacity picker: visible for the Highlight tool or a selected highlight.
   const showOpacity =
     tool === "highlight" || (selected && selected.type === "highlight");
+  // The cross-hatch used for "no color / none" swatches.
+  const noneBg = "linear-gradient(135deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), linear-gradient(45deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), #fff";
 
   return (
     <div className="annot-toolbar">
@@ -183,20 +254,20 @@ export default function AnnotationToolbar() {
           </button>
         ))}
 
-        <div className="shape-picker">
+        <div className="shape-picker" ref={shapeRef}>
           <button
             className={`annot-tool ${tool === "shape" ? "active" : ""}`}
             title="Shapes"
             onClick={() => {
               setShape(activeShape.id);
-              setShapeOpen((v) => !v);
+              openMenu(shapeOpen ? "none" : "shape");
             }}
           >
             <span className="glyph">{activeShape.glyph}</span>
             <span className="caret">{"\u25BE"}</span>
           </button>
           {shapeOpen && (
-            <div className="shape-menu" onMouseLeave={() => setShapeOpen(false)}>
+            <div className="shape-menu">
               {SHAPES.map((s) => (
                 <button
                   key={s.id}
@@ -204,7 +275,7 @@ export default function AnnotationToolbar() {
                   title={s.label}
                   onClick={() => {
                     setShape(s.id);
-                    setShapeOpen(false);
+                    openMenu("none");
                   }}
                 >
                   <span className="glyph">{s.glyph}</span>
@@ -217,6 +288,9 @@ export default function AnnotationToolbar() {
 
       <div className="annot-sep" />
 
+      {/* Drawing-ink row. With a DRAWING mark selected, recolors it; with
+          a text box selected it only changes the default ink — text color
+          is the "A" button in the text cluster below. */}
       <div className="annot-colors">
         {COLORS.map((c) => (
           <button
@@ -288,43 +362,69 @@ export default function AnnotationToolbar() {
         </>
       )}
 
-      {/* Text treatments — Bold / Italic / Underline / font / size / align.
-          Shown at ALL times so the Underline tool sits next to B and I no
-          matter what you're doing; with no text box selected the controls
-          set the defaults for new text boxes. */}
+      {/* Text treatments — text color / background / Bold / Italic /
+          Underline / bullet / font / size / align. Shown at ALL times so
+          the Underline tool sits next to B and I no matter what you're
+          doing; with no text box selected the controls set the defaults
+          for new text boxes. Text color and background color are TWO
+          separate pickers here. */}
       <div className="annot-sep" />
       <div className="text-props">
-        {/* Background color for Text box / Edit existing text. With a box
-            selected it tunes THAT box (for an edited line: the patch color
-            it paints over the old text — match it to your page background). */}
-        <div className="bg-picker">
+        {/* TEXT color ("A"). Separate picker: recolors the selected box,
+            or sets the ink for new boxes. Never touches the background. */}
+        <div className="prop-picker" ref={textColorRef}>
+          <button
+            className="text-color-btn"
+            title="Text color"
+            onClick={() => openMenu(textColorOpen ? "none" : "text")}
+          >
+            <span className="text-color-a" style={{ color: effTextColor }}>A</span>
+          </button>
+          {textColorOpen && (
+            <div className="prop-menu">
+              {TEXT_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`bg-item ${effTextColor === c ? "active" : ""}`}
+                  title={c}
+                  style={{ background: c }}
+                  onClick={() => setTextColor(c)}
+                />
+              ))}
+              <label className="color-picker" title="Custom text color">
+                <span className="picker-ring" style={{ background: effTextColor }} />
+                <input
+                  type="color"
+                  value={effTextColor}
+                  onChange={(e) => setTextColor(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+        {/* BACKGROUND color. Separate picker: tint behind a plain text
+            box, or the patch an edited line paints over the old text —
+            match it to your page background so the edit blends in. */}
+        <div className="bg-picker" ref={bgRef}>
           <button
             className="bg-btn"
             title="Text background color"
-            onClick={() => setBgOpen((v) => !v)}
+            onClick={() => openMenu(bgOpen ? "none" : "bg")}
           >
             <span
               className="bg-swatch"
-              style={
-                effBg === "transparent"
-                  ? { background: "linear-gradient(135deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), linear-gradient(45deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), #fff" }
-                  : { background: effBg }
-              }
+              style={effBg === "transparent" ? { background: noneBg } : { background: effBg }}
             />
           </button>
           {bgOpen && (
-            <div className="bg-menu" onMouseLeave={() => setBgOpen(false)}>
+            <div className="prop-menu">
               {BG_COLORS.map((c) => (
                 <button
                   key={c.id}
                   className={`bg-item ${effBg === c.id ? "active" : ""}`}
                   title={c.label}
-                  onClick={() => { setTextBgColor(c.id); setBgOpen(false); }}
-                  style={
-                    c.id === "transparent"
-                      ? { background: "linear-gradient(135deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), linear-gradient(45deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), #fff" }
-                      : { background: c.id }
-                  }
+                  style={{ background: c.id === "transparent" ? noneBg : c.id }}
+                  onClick={() => setTextBgColor(c.id)}
                 />
               ))}
               <label className="color-picker" title="Custom background color">
@@ -379,13 +479,46 @@ export default function AnnotationToolbar() {
         >
           <span className="glyph-underline">U</span>
         </button>
-        <button
-          className={`text-btn ${effBullet ? "active" : ""}`}
-          title="Bullet point (the text starts with a bullet)"
-          onClick={() => setTextStyle({ bullet: !effBullet })}
-        >
-          <span className="bullet-glyph">{"\u2022"}</span>
-        </button>
+        {/* Bullet: the button toggles on (round dot) / off; the caret
+            picks the marker style. Applies to Text box AND Edit
+            existing text — one marker at the start of the text. */}
+        <div className="bullet-picker" ref={bulletRef}>
+          <button
+            className={`text-btn ${effBullet ? "active" : ""}`}
+            title={effBullet ? `Bullet: ${effBullet} (click to remove)` : "Bullet point"}
+            onClick={() => setTextStyle({ bullet: effBullet ? undefined : "round" })}
+          >
+            <span className="bullet-glyph">{BULLET_GLYPH[effBullet] || "\u2022"}</span>
+          </button>
+          <button
+            className="caret-btn"
+            title="Bullet style"
+            onClick={() => openMenu(bulletOpen ? "none" : "bullet")}
+          >
+            {"\u25BE"}
+          </button>
+          {bulletOpen && (
+            <div className="prop-menu bullet-menu">
+              <button
+                className={`bullet-item ${effBullet ? "" : "active"}`}
+                title="No bullet"
+                onClick={() => { setTextStyle({ bullet: undefined }); openMenu("none"); }}
+              >
+                <span className="none-glyph">{"\u2205"}</span>
+              </button>
+              {BULLET_STYLES.map((b) => (
+                <button
+                  key={b.id}
+                  className={`bullet-item ${effBullet === b.id ? "active" : ""}`}
+                  title={`${b.label} bullet`}
+                  onClick={() => { setTextStyle({ bullet: b.id }); openMenu("none"); }}
+                >
+                  {b.glyph}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
           <select
             className="size-select"
             value={effSize}
