@@ -1102,3 +1102,26 @@ button {
 .toast.error {
   background: var(--danger);
 }
+
+/* ---- Tier-2: undo/redo, eraser, filled shapes, glyph stamps ---- */
+
+/* Undo/redo buttons: same look as the other tool buttons, dimmed when
+   there is nothing to undo/redo */
+   .annot-tool.disabled,
+   .annot-tool:disabled {
+     opacity: 0.35;
+     cursor: default;
+     pointer-events: none;
+   }
+   
+   /* Standalone check / cross stamps: no border or white background — just
+      the mark itself, sized to sit inside a checkbox on the page */
+   .annot-label.glyph {
+     border: none;
+     background: transparent;
+     padding: 0;
+   }
+   .annot-label.glyph .annot-label-text {
+     font-size: 18px;
+     line-height: 1;
+   }
