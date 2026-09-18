@@ -19,6 +19,7 @@ export default function Toolbar() {
     saveAnnotations,
     exportAnnotated,
     clearAnnotations,
+    showToast,
   } = useDocument();
   const openRef = useRef(null);
   const mergeRef = useRef(null);
@@ -28,12 +29,26 @@ export default function Toolbar() {
 
   async function handleExport() {
     const flatId = await exportAnnotated();
-    if (flatId) {
-      const url = `/api/documents/${flatId}/raw`;
+    if (!flatId) return; // the store already surfaced the error as a toast
+    // Download via blob: a plain anchor click can silently do nothing in
+    // some browsers (no Content-Disposition, popup blockers), which is
+    // what made Export look dead. Fetching the bytes and using an object
+    // URL always triggers the download — and a failed fetch is reported.
+    try {
+      const res = await fetch(`/api/documents/${flatId}/raw`);
+      if (!res.ok) throw new Error(`server responded ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = "annotated.pdf";
+      document.body.appendChild(a);
       a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      showToast("Exported - Download Starting");
+    } catch (e) {
+      showToast("Exported, but the download failed: " + e.message, "error");
     }
   }
 
