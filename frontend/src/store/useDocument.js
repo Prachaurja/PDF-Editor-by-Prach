@@ -9,6 +9,7 @@ import {
   loadAnnotationLayer,
   exportAnnotated,
   fetchPageLines,
+  extractPages,
 } from "../api/client";
 
 let annotationSeq = 1;
@@ -141,12 +142,16 @@ export const useDocument = create((set, get) => {
   resizing: null, // { id } while a text box is being resized (UI only)
   toast: null, // { message, id } — a brief confirmation banner
   pageLines: {}, // cache: source page index -> extracted text lines, for click-to-edit
+  // ---- ribbon (Word-style tabs) ----
+  ribbonTab: "home", // "home" | "pages" | "rotate" | "sign" | "convert" | "optimize"
+  // Pages tab: multi-select of plan positions (display order, 0-based).
+  pageSelection: [],
   // ---- undo / redo (annotation layer, capped at HISTORY_LIMIT) ----
   history: { past: [], future: [] },
 
   async load(file) {
     lastHistoryPush = { id: null, at: 0 };
-    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {}, zoom: 1, history: { past: [], future: [] } });
+    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {}, zoom: 1, history: { past: [], future: [] }, ribbonTab: "home", pageSelection: [] });
     try {
       const doc = await uploadDocument(file);
       // restore any editable annotation layer saved for this document
@@ -186,7 +191,8 @@ export const useDocument = create((set, get) => {
       const plan = s.plan.slice();
       plan.splice(planIndex, 1);
       const currentPage = Math.min(s.currentPage, plan.length - 1);
-      return { plan, currentPage, error: null };
+      // Positions after the deleted one shift — the multi-select is stale.
+      return { plan, currentPage, error: null, pageSelection: [] };
     });
   },
 
@@ -196,15 +202,105 @@ export const useDocument = create((set, get) => {
       const plan = s.plan.slice();
       const [moved] = plan.splice(from, 1);
       plan.splice(to, 0, moved);
-      return { plan, currentPage: to };
+      // Reordering shifts positions, so a multi-select would point at the
+      // wrong pages — drop it.
+      return { plan, currentPage: to, pageSelection: [] };
     });
   },
 
   resetPlan() {
     const { doc } = get();
-    if (doc) set({ plan: planFromDoc(doc), error: null });
+    if (doc) set({ plan: planFromDoc(doc), error: null, pageSelection: [] });
+  },
+  // ---- ribbon + Pages-tab multi-select ----
+  setRibbonTab(tab) {
+    set({ ribbonTab: tab });
   },
 
+  togglePageSelection(index) {
+    set((s) => ({
+      pageSelection: s.pageSelection.includes(index)
+        ? s.pageSelection.filter((i) => i !== index)
+        : [...s.pageSelection, index],
+    }));
+  },
+
+  clearPageSelection() {
+    set({ pageSelection: [] });
+  },
+
+  // Rotate every selected page 90° clockwise. The selection is kept so you
+  // can rotate again (or rotate the same set twice for 180°).
+  rotateSelectedPages() {
+    const { pageSelection } = get();
+    if (pageSelection.length === 0) return;
+    set((s) => ({
+      plan: s.plan.map((p, i) =>
+        s.pageSelection.includes(i)
+          ? { ...p, rotation: (((p.rotation + 90) % 360) + 360) % 360 }
+          : p
+      ),
+    }));
+  },
+
+  // Delete every selected page (never the last remaining page).
+  deleteSelectedPages() {
+    const { pageSelection, plan } = get();
+    if (pageSelection.length === 0) return;
+    if (pageSelection.length >= plan.length) {
+      set({ error: "A document needs at least one page." });
+      return;
+    }
+    const toDelete = new Set(pageSelection);
+    set((s) => {
+      const kept = s.plan.filter((_, i) => !toDelete.has(i));
+      return {
+        plan: kept,
+        currentPage: Math.min(s.currentPage, kept.length - 1),
+        pageSelection: [],
+        error: null,
+      };
+    });
+  },
+
+  // Extract the selected pages into a fresh document and open it.
+  // Refuses to run while there are UNSAVED marks (they belong to the current
+  // file and would otherwise be silently left behind).
+  async extractSelectedPages() {
+    const { doc, plan, pageSelection, isAnnotationsDirty, saving } = get();
+    if (!doc || saving || pageSelection.length === 0) return;
+    if (isAnnotationsDirty()) {
+      get().showToast("Save your marks before extracting pages", "error");
+      return;
+    }
+    const sourceIdx = [...new Set(pageSelection.map((i) => plan[i].sourceIndex))].sort(
+      (a, b) => a - b
+    );
+    set({ saving: true, error: null });
+    try {
+      const newDoc = await extractPages(doc.file_id, sourceIdx);
+      set({
+        doc: newDoc,
+        plan: planFromDoc(newDoc),
+        currentPage: 0,
+        saving: false,
+        pageSelection: [],
+        annotations: [],
+        selectedId: null,
+        tool: "select",
+        annotationsDirty: false,
+        ribbonTab: "pages",
+        history: { past: [], future: [] },
+      });
+      get().showToast(
+        `Extracted ${sourceIdx.length} page${sourceIdx.length > 1 ? "s" : ""} into a new document`
+      );
+    } catch (e) {
+      set({ error: e.message, saving: false });
+      get().showToast("Extract failed: " + e.message, "error");
+    }
+  },
+  
   isDirty() {
     const { doc, plan } = get();
     if (!doc) return false;
@@ -224,12 +320,13 @@ export const useDocument = create((set, get) => {
         source_index: p.sourceIndex,
         rotation: p.rotation,
       }));
-      const newDoc = await applyPlan(doc.file_id, payload);
+            const newDoc = await applyPlan(doc.file_id, payload);
       set({
         doc: newDoc,
         plan: planFromDoc(newDoc),
         currentPage: 0,
         saving: false,
+        pageSelection: [],
       });
       get().showToast("Page Saved");
     } catch (e) {
@@ -243,7 +340,7 @@ export const useDocument = create((set, get) => {
     set({ saving: true, error: null });
     try {
       const result = await splitDocument(doc.file_id, atIndex);
-      set({ splitResult: result, saving: false });
+      set({ splitResult: result, saving: false, pageSelection: [] });
     } catch (e) {
       set({ error: e.message, saving: false });
     }
@@ -265,6 +362,7 @@ export const useDocument = create((set, get) => {
         plan: planFromDoc(newDoc),
         currentPage: 0,
         saving: false,
+        pageSelection: [],
       });
       get().showToast("Document Merged");
     } catch (e) {
@@ -564,6 +662,8 @@ export const useDocument = create((set, get) => {
       tool: "select",
       annotationsDirty: false,
       zoom: 1,
+      ribbonTab: "home",
+      pageSelection: [],
       history: { past: [], future: [] },
     });
   },
