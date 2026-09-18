@@ -62,11 +62,10 @@ const FONTS = [
 ];
 
 const LINE_WIDTHS = [1, 2, 3, 4];
-const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra Thick" };
+const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra thick" };
 const HIGHLIGHT_OPACITIES = [0.15, 0.3, 0.5];
 const HIGHLIGHT_OPACITY_LABEL = { 0.15: "Light", 0.3: "Medium", 0.5: "Strong" };
 const STAMP_LABELS = ["APPROVED", "REJECTED", "CONFIDENTIAL", "DRAFT", "PENDING"];
-
 
 export default function AnnotationToolbar() {
   const {
@@ -83,6 +82,18 @@ export default function AnnotationToolbar() {
   const selected = annotations.find((a) => a.id === selectedId);
   const showText = tool === "text" || (selected && selected.type === "text");
   const activeShape = SHAPES.find((s) => s.id === shape) || SHAPES[0];
+
+  // When a text box is selected, the text controls show AND act on THAT
+  // box's own values (not the global "new box" defaults). Toggling was
+  // previously based on the global style, so once the two diverged — e.g.
+  // box A made italic, then box B selected — clicking I on B appeared to
+  // do nothing (it was actually turning the global flag back off).
+  const selIsText = !!selected && selected.type === "text";
+  const effBold = selIsText ? !!selected.bold : textStyle.bold;
+  const effItalic = selIsText ? !!selected.italic : textStyle.italic;
+  const effFont = selIsText ? selected.fontFamily || textStyle.fontFamily : textStyle.fontFamily;
+  const effSize = selIsText ? selected.fontSize || textStyle.fontSize : textStyle.fontSize;
+  const effAlign = selIsText ? selected.align || textStyle.align : textStyle.align;
   // Thickness picker: visible for the stroke tools, or when a drawn
   // stroke/shape is selected (so you can re-thicken a mark you drew).
   const showWidth =
@@ -209,15 +220,15 @@ export default function AnnotationToolbar() {
             ))}
           </select>
         </>
-      )}  
+      )}
 
       {showText && (
         <>
           <div className="annot-sep" />
           <div className="text-props">
-         <select
+          <select
             className="font-select"
-            value={textStyle.fontFamily}
+            value={effFont}
             title="Font"
             onChange={(e) => setTextStyle({ fontFamily: e.target.value })}
           >
@@ -236,23 +247,23 @@ export default function AnnotationToolbar() {
             ))}
           </select>
           <button
-            className={`text-btn ${textStyle.bold ? "active" : ""}`}
+            className={`text-btn ${effBold ? "active" : ""}`}
             title="Bold"
-            onClick={() => setTextStyle({ bold: !textStyle.bold })}
+            onClick={() => setTextStyle({ bold: !effBold })}
           >
             <b>B</b>
           </button>
           <button
-            className={`text-btn ${textStyle.italic ? "active" : ""}`}
+            className={`text-btn ${effItalic ? "active" : ""}`}
             title="Italic"
-            onClick={() => setTextStyle({ italic: !textStyle.italic })}
+            onClick={() => setTextStyle({ italic: !effItalic })}
           >
             <i className="italic-glyph">I</i>
           </button>
             <select
               className="size-select"
-              value={textStyle.fontSize}
-              title="Font Size"
+              value={effSize}
+              title="Font size"
               onChange={(e) => setTextStyle({ fontSize: Number(e.target.value) })}
             >
               {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((s) => (
@@ -267,7 +278,7 @@ export default function AnnotationToolbar() {
               ].map((al) => (
                 <button
                   key={al.id}
-                  className={`text-btn ${textStyle.align === al.id ? "active" : ""}`}
+                  className={`text-btn ${effAlign === al.id ? "active" : ""}`}
                   title={`Align ${al.id}`}
                   onClick={() => setTextStyle({ align: al.id })}
                 >
