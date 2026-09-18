@@ -87,29 +87,21 @@ def _new_output_path() -> tuple[str, Path]:
     return file_id, PROCESSED_DIR / f"{file_id}.pdf"
 
 
-def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float,
-                filled: bool = False) -> None:
-    """Draw a vector shape onto the page (burned in).
-
-    When `filled` is set, CLOSED shapes (rect, ellipse, triangle, diamond,
-    star) also get a semi-transparent fill of the same color as the outline
-    — the "emphasis box" look. Open strokes (check, cross) ignore it:
-    filling a check mark would just smear it into a blob.
-    """
+def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float) -> None:
+    """Draw a vector shape onto the page (burned in)."""
     x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    fill_kw = {"fill": color, "fill_opacity": 0.25} if filled else {}
 
     if shape == "rect":
-        page.draw_rect(rect, color=color, width=width, **fill_kw)
+        page.draw_rect(rect, color=color, width=width)
     elif shape == "ellipse":
-        page.draw_oval(rect, color=color, width=width, **fill_kw)
+        page.draw_oval(rect, color=color, width=width)
     elif shape == "triangle":
         pts = [fitz.Point(cx, y0), fitz.Point(x1, y1), fitz.Point(x0, y1)]
-        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width)
     elif shape == "diamond":
         pts = [fitz.Point(cx, y0), fitz.Point(x1, cy), fitz.Point(cx, y1), fitz.Point(x0, cy)]
-        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width)
     elif shape == "star":
         import math
         pts = []
@@ -118,7 +110,7 @@ def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float,
             ang = math.pi / 5 * i - math.pi / 2
             r = 1 if i % 2 == 0 else 0.42
             pts.append(fitz.Point(cx + math.cos(ang) * rx * r, cy + math.sin(ang) * ry * r))
-        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width)
     elif shape == "check":
         pts = [fitz.Point(x0, cy), fitz.Point(x0 + (x1 - x0) * 0.4, y1), fitz.Point(x1, y0)]
         page.draw_polyline(pts, color=color, width=width)
@@ -201,7 +193,13 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 cover_box = fitz.Rect(
                     box.x0 - pad, box.y0 - pad, box.x1 + pad, box.y1 + pad
                 )
-                page.add_redact_annot(cover_box, fill=(1, 1, 1))
+                # Paint the erase area with the line's OWN background color
+                # (the user matched it to the page in the toolbar) instead
+                # of hardcoded white - on a beige page a white patch reads
+                # as a sticker, a matching tone reads as "same line, edited".
+                # No/unknown cover color falls back to white (classic look).
+                fill = _hex_to_rgb(ann.cover_color) if ann.cover_color else (1, 1, 1)
+                page.add_redact_annot(cover_box, fill=fill)
                 pages_with_redactions.add(ann.page)
         for page_index in pages_with_redactions:
             doc.load_page(page_index).apply_redactions()
@@ -267,7 +265,7 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 annot.update()
 
             elif ann.type == "shape" and ann.rects:
-                _draw_shape(page, ann.shape or "rect", fitz.Rect(ann.rects[0]), color, ann.width, ann.filled)
+                _draw_shape(page, ann.shape or "rect", fitz.Rect(ann.rects[0]), color, ann.width)
 
             elif ann.type == "text" and ann.x is not None and ann.y is not None:
                 fs = ann.font_size or 14
@@ -291,6 +289,24 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 # boundary — not this possibly-taller draw box. So nothing
                 # to do here for that part — just draw the replacement text.
                 if text.strip():
+                    # Bullet point: draw a small filled CIRCLE left of the
+                    # first line and indent the text to make room — the same
+                    # one-marker look as the preview. The "\u2022" CHARACTER
+                    # can't be used: the built-in PDF base fonts render it as
+                    # a small middle dot, not a real bullet (verified —
+                    # even en/em dashes degrade the same way).
+                    if ann.bullet:
+                        page.draw_circle(
+                            fitz.Point(box.x0 + fs * 0.32, box.y0 + fs * 0.5),
+                            fs * 0.15,
+                            color=None, fill=color,
+                        )
+                        box = fitz.Rect(box.x0 + fs * 0.9, box.y0, box.x1, box.y1)
+                    # Opaque background behind a plain text box (the user's
+                    # "text background" pick). Cover edits don't need this —
+                    # their redaction already painted the patch.
+                    if ann.bg_color:
+                        page.draw_rect(box, color=None, fill=_hex_to_rgb(ann.bg_color))
                     rc = page.insert_textbox(
                         box, text, fontsize=fs, fontname=fontname,
                         color=color, align=align_map.get(ann.align, fitz.TEXT_ALIGN_LEFT),
@@ -303,11 +319,12 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                         # follows visually, never delete it, keeping the
                         # same safety guarantee as the main path above.
                         taller = fitz.Rect(box.x0, box.y0, box.x1, box.y0 + h * 2 + 20)
+                        if ann.bg_color:
+                            page.draw_rect(taller, color=None, fill=_hex_to_rgb(ann.bg_color))
                         page.insert_textbox(
                             taller, text, fontsize=fs, fontname=fontname,
                             color=color, align=align_map.get(ann.align, fitz.TEXT_ALIGN_LEFT),
                         )
-
             elif ann.type == "note" and ann.x is not None and ann.y is not None:
                 annot = page.add_text_annot(fitz.Point(ann.x, ann.y), ann.text or "")
                 annot.set_colors(stroke=color)
