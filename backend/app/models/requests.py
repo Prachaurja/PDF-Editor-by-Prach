@@ -25,6 +25,13 @@ class MergeRequest(BaseModel):
     after_index: int = Field(-1, description="Insert after this output position; -1 = prepend at start")
 
 
+class ExtractRequest(BaseModel):
+    """Extract specific pages (0-based indices in the ORIGINAL document)
+    into a fresh document, in ascending order."""
+
+    pages: list[int] = Field(..., min_length=1, description="Page indices to extract")    
+
+
 # ---- Slice 3: annotations ----
 
 from typing import Literal, Optional
