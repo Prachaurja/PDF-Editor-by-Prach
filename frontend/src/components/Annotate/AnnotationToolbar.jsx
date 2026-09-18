@@ -65,6 +65,21 @@ const LINE_WIDTHS = [1, 2, 3, 4];
 const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra thick" };
 const HIGHLIGHT_OPACITIES = [0.15, 0.3, 0.5];
 const HIGHLIGHT_OPACITY_LABEL = { 0.15: "Light", 0.3: "Medium", 0.5: "Strong" };
+// Background palette for Text box / Edit existing text. First entry = no
+// background. The light tones are meant to blend into non-white page
+// backgrounds (beige, gray, colored headers) so an edited line stops
+// looking like a white sticker on the page.
+const BG_COLORS = [
+  { id: "transparent", label: "None (no background)" },
+  { id: "#ffffff", label: "White" },
+  { id: "#f7f3e9", label: "Cream" },
+  { id: "#efe9dc", label: "Beige" },
+  { id: "#f0f0f0", label: "Light gray" },
+  { id: "#fff9c4", label: "Pale yellow" },
+  { id: "#e3f2fd", label: "Pale blue" },
+  { id: "#e8f5e9", label: "Pale green" },
+  { id: "#fdecea", label: "Pale red" },
+];
 // "\u2714" / "\u2718" = standalone check / cross marks — placed with one
 // click (no drag) so you can tick any checkbox in the document. Drawn as
 // vectors on export (base PDF fonts have no glyph for them).
@@ -77,10 +92,11 @@ export default function AnnotationToolbar() {
     lineWidth, setLineWidth,
     highlightOpacity, setHighlightOpacity,
     stampLabel, setStampLabel,
-    shapeFilled, setShapeFilled,
+    textBgColor, setTextBgColor,
     history, undo, redo,
   } = useDocument();
   const [shapeOpen, setShapeOpen] = useState(false);
+  const [bgOpen, setBgOpen] = useState(false);
 
   // Keyboard shortcuts: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y
   // redo. Textareas/inputs keep the browser's own text undo, so we stay
@@ -118,17 +134,18 @@ export default function AnnotationToolbar() {
   const effFont = selIsText ? selected.fontFamily || textStyle.fontFamily : textStyle.fontFamily;
   const effSize = selIsText ? selected.fontSize || textStyle.fontSize : textStyle.fontSize;
   const effAlign = selIsText ? selected.align || textStyle.align : textStyle.align;
-  // Same idea for the fill toggle: with a shape selected it reads/writes
-  // THAT shape; otherwise it's the default for new shapes.
-  const selIsShape = !!selected && selected.type === "shape";
-  const effFilled = selIsShape ? !!selected.filled : shapeFilled;
+  const effBullet = selIsText ? !!selected.bullet : textStyle.bullet;
+  // Background: with a text box selected it reads THAT box (edited lines
+  // store their patch color as coverColor, which is always a real color —
+  // a redaction must paint something — so it never reads "transparent").
+  const effBg = selIsText
+    ? (selected.cover ? selected.coverColor || "#ffffff" : selected.bgColor || "transparent")
+    : textBgColor;
   // Thickness picker: visible for the stroke tools, or when a drawn
   // stroke/shape is selected (so you can re-thicken a mark you drew).
   const showWidth =
     tool === "pen" || tool === "shape" ||
     (selected && ["pen", "line", "arrow", "shape", "rect"].includes(selected.type));
-  // Fill picker: visible for the Shapes tool or a selected shape.
-  const showFilled = tool === "shape" || (selected && selected.type === "shape");
   // Opacity picker: visible for the Highlight tool or a selected highlight.
   const showOpacity =
     tool === "highlight" || (selected && selected.type === "highlight");
@@ -234,19 +251,6 @@ export default function AnnotationToolbar() {
         </>
       )}
 
-      {showFilled && (
-        <>
-          <div className="annot-sep" />
-          <button
-            className={`text-btn ${effFilled ? "active" : ""}`}
-            title="Fill shape (closed shapes: rectangle, ellipse, triangle, diamond, star)"
-            onClick={() => setShapeFilled(!effFilled)}
-          >
-            {effFilled ? "\u25FC" : "\u25FB"}
-          </button>
-        </>
-      )}
-
       {showOpacity && (
         <>
           <div className="annot-sep" />
@@ -290,6 +294,50 @@ export default function AnnotationToolbar() {
           set the defaults for new text boxes. */}
       <div className="annot-sep" />
       <div className="text-props">
+        {/* Background color for Text box / Edit existing text. With a box
+            selected it tunes THAT box (for an edited line: the patch color
+            it paints over the old text — match it to your page background). */}
+        <div className="bg-picker">
+          <button
+            className="bg-btn"
+            title="Text background color"
+            onClick={() => setBgOpen((v) => !v)}
+          >
+            <span
+              className="bg-swatch"
+              style={
+                effBg === "transparent"
+                  ? { background: "linear-gradient(135deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), linear-gradient(45deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), #fff" }
+                  : { background: effBg }
+              }
+            />
+          </button>
+          {bgOpen && (
+            <div className="bg-menu" onMouseLeave={() => setBgOpen(false)}>
+              {BG_COLORS.map((c) => (
+                <button
+                  key={c.id}
+                  className={`bg-item ${effBg === c.id ? "active" : ""}`}
+                  title={c.label}
+                  onClick={() => { setTextBgColor(c.id); setBgOpen(false); }}
+                  style={
+                    c.id === "transparent"
+                      ? { background: "linear-gradient(135deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), linear-gradient(45deg, transparent 45%, var(--border) 45%, var(--border) 55%, transparent 55%), #fff" }
+                      : { background: c.id }
+                  }
+                />
+              ))}
+              <label className="color-picker" title="Custom background color">
+                <span className="picker-ring" style={{ background: effBg === "transparent" ? "transparent" : effBg }} />
+                <input
+                  type="color"
+                  value={effBg === "transparent" ? "#ffffff" : effBg}
+                  onChange={(e) => setTextBgColor(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+        </div>
         <select
           className="font-select"
           value={effFont}
@@ -330,6 +378,13 @@ export default function AnnotationToolbar() {
           onClick={() => setTool("underline")}
         >
           <span className="glyph-underline">U</span>
+        </button>
+        <button
+          className={`text-btn ${effBullet ? "active" : ""}`}
+          title="Bullet point (the text starts with a bullet)"
+          onClick={() => setTextStyle({ bullet: !effBullet })}
+        >
+          <span className="bullet-glyph">{"\u2022"}</span>
         </button>
           <select
             className="size-select"
