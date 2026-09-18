@@ -1135,12 +1135,17 @@ button {
   padding-left: 12px;
 }
 .text-box.bullet::before {
-  content: "\2022";
   position: absolute;
   left: 1px;
   top: 0;
   color: inherit;
 }
+.text-box.bullet-round::before { content: "\2022"; }
+.text-box.bullet-open::before { content: "\25E1"; }
+.text-box.bullet-square::before { content: "\25AA"; }
+.text-box.bullet-dash::before { content: "\2013"; }
+.text-box.bullet-triangle::before { content: "\25B8"; }
+.text-box.bullet-star::before { content: "\2605"; }
 .bullet-glyph { font-weight: 700; }
 
 /* ---- Text background color picker (Text box / Edit existing text) ---- */
@@ -1162,7 +1167,11 @@ button {
   border-radius: 4px;
   border: 1px solid var(--border);
 }
-.bg-menu {
+/* Shared dropdown menu for the text-cluster pickers (text color,
+   background color, bullet style). Closes on click-away, NOT on
+   mouseleave — mouseleave made the menu vanish the instant the pointer
+   moved to the OS color dialog. */
+.prop-menu {
   position: absolute;
   top: 34px;
   left: -6px;
@@ -1185,3 +1194,48 @@ button {
   cursor: pointer;
 }
 .bg-item.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---- Text color ("A") picker — separate from the drawing-ink row ---- */
+
+.prop-picker { position: relative; display: inline-flex; align-items: center; }
+.text-color-btn {
+  width: 34px;
+  height: 28px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.text-color-btn:hover { background: var(--hover, rgba(0,0,0,0.05)); }
+.text-color-a { font-weight: 700; font-size: 15px; line-height: 1; }
+
+/* ---- Bullet toggle + style dropdown ---- */
+
+.bullet-picker { position: relative; display: inline-flex; align-items: center; }
+.bullet-picker .text-btn { border-radius: 6px 0 0 6px; }
+.caret-btn {
+  width: 16px;
+  height: 28px;
+  border-radius: 0 6px 6px 0;
+  font-size: 9px;
+  color: var(--muted, #6b6862);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.caret-btn:hover { background: var(--hover, rgba(0,0,0,0.05)); }
+.bullet-menu { grid-template-columns: repeat(2, 26px); }
+.bullet-item {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--canvas);
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bullet-item.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.bullet-item .none-glyph { font-size: 11px; color: var(--muted, #6b6862); }
