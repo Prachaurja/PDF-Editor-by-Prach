@@ -616,8 +616,28 @@ button {
   border: 1.5px solid;
   border-radius: 5px;
   white-space: nowrap;
-  cursor: pointer;
+  cursor: grab; /* the label is movable — grab affordance */
   z-index: 6;
+}
+
+.annot-label:active {
+  cursor: grabbing;
+}
+
+.annot-label.editing {
+  cursor: text;
+  white-space: normal;
+}
+
+/* Inline text editor that appears inside a note/stamp on double-click */
+.note-edit {
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  min-width: 80px;
 }
 
 .annot-label.note::before {
@@ -1076,4 +1096,9 @@ button {
   10% { opacity: 1; transform: translateX(-50%) translateY(0); }
   85% { opacity: 1; transform: translateX(-50%) translateY(0); }
   100% { opacity: 0; transform: translateX(-50%) translateY(8px); }
+}
+
+/* Error toasts (red) - added with the error-kind toasts */
+.toast.error {
+  background: var(--danger);
 }
