@@ -13,6 +13,13 @@ import {
 
 let annotationSeq = 1;
 
+// Undo/redo of the annotation layer: snapshot-based, capped.
+const HISTORY_LIMIT = 50;
+// Coalescing bookkeeping: updates to the SAME object within COALESCE_MS are
+// one gesture (a drag, a typing burst) -> a single undo step.
+let lastHistoryPush = { id: null, at: 0 };
+const COALESCE_MS = 600;
+
 // Backend stores snake_case; the UI uses camelCase. Convert on the way in/out.
 function fromBackend(a) {
   return {
@@ -39,6 +46,7 @@ function fromBackend(a) {
     h: a.h ?? undefined,
     opacity: a.opacity ?? undefined,
     cover: a.cover ?? false,
+    filled: a.filled ?? false,
     createdAt: a.created_at || new Date().toISOString(),
   };
 }
@@ -65,6 +73,7 @@ function toBackend(a) {
     h: a.h ?? null,
     opacity: a.opacity ?? null,
     cover: a.cover ?? false,
+    filled: a.filled ?? false,
     created_at: a.createdAt || null,
   };
 }
@@ -80,7 +89,22 @@ function planFromDoc(doc) {
   }));
 }
 
-export const useDocument = create((set, get) => ({
+export const useDocument = create((set, get) => {
+  // Push a snapshot of the CURRENT annotation layer onto the undo stack.
+  // With coalesceMs > 0, a second push for the same object inside the
+  // window is skipped, so one drag / one typing burst stays one step.
+  const pushHistory = ({ id = null, coalesceMs = 0 } = {}) => {
+    const now = Date.now();
+    if (coalesceMs > 0 && lastHistoryPush.id === id && now - lastHistoryPush.at < coalesceMs) return;
+    lastHistoryPush = { id, at: now };
+    set((s) => {
+      const past = [...s.history.past, s.annotations];
+      if (past.length > HISTORY_LIMIT) past.shift();
+      return { history: { past, future: [] } };
+    });
+  };
+
+  return {
   doc: null, // DocumentInfo of the loaded (saved) document
   plan: [], // staged pages, may differ from doc until saved
   currentPage: 0,
@@ -92,6 +116,7 @@ export const useDocument = create((set, get) => ({
   // ---- annotations (Slice 3) ----
   tool: "select", // active annotation tool
   shape: "rect", // active shape when tool === "shape"
+  shapeFilled: false, // filled (semi-transparent) shapes — closed shapes only
   color: "#0f6b62", // active color
   textStyle: { fontSize: 14, bold: false, italic: false, align: "left", fontFamily: "Helvetica" },
   lineWidth: 2, // pen/shape/line/arrow thickness, PDF points (1-4)
@@ -104,9 +129,12 @@ export const useDocument = create((set, get) => ({
   resizing: null, // { id } while a text box is being resized (UI only)
   toast: null, // { message, id } — a brief confirmation banner
   pageLines: {}, // cache: source page index -> extracted text lines, for click-to-edit
+  // ---- undo / redo (annotation layer, capped at HISTORY_LIMIT) ----
+  history: { past: [], future: [] },
 
   async load(file) {
-    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {}, zoom: 1 });
+    lastHistoryPush = { id: null, at: 0 };
+    set({ loading: true, error: null, splitResult: null, annotations: [], selectedId: null, tool: "select", pageLines: {}, zoom: 1, history: { past: [], future: [] } });
     try {
       const doc = await uploadDocument(file);
       // restore any editable annotation layer saved for this document
@@ -117,7 +145,7 @@ export const useDocument = create((set, get) => ({
       } catch {
         annotations = [];
       }
-      set({ doc, plan: planFromDoc(doc), currentPage: 0, loading: false, annotations, annotationsDirty: false });
+      set({ doc, plan: planFromDoc(doc), currentPage: 0, loading: false, annotations, annotationsDirty: false, history: { past: [], future: [] } });
     } catch (e) {
       set({ error: e.message, loading: false });
     }
@@ -269,6 +297,8 @@ export const useDocument = create((set, get) => ({
   },
 
   setTextStyle(patch) {
+    const { selectedId, annotations } = get();
+    if (selectedId && annotations.some((a) => a.id === selectedId && a.type === "text")) pushHistory();
     set((s) => {
       const textStyle = { ...s.textStyle, ...patch };
       if (s.selectedId) {
@@ -282,6 +312,8 @@ export const useDocument = create((set, get) => ({
   },
 
   setColor(color) {
+    const { selectedId, annotations } = get();
+    if (selectedId && annotations.some((a) => a.id === selectedId)) pushHistory();
     set((s) => {
       if (s.selectedId) {
         const annotations = s.annotations.map((a) =>
@@ -296,6 +328,8 @@ export const useDocument = create((set, get) => ({
   // the currently selected (line-type) annotation so you can re-thicken a
   // mark you already drew.
   setLineWidth(width) {
+    const { selectedId, annotations } = get();
+    if (selectedId && annotations.some((a) => a.id === selectedId && ["pen", "line", "arrow", "shape", "rect"].includes(a.type))) pushHistory();
     set((s) => {
       if (s.selectedId) {
         const annotations = s.annotations.map((a) =>
@@ -311,6 +345,8 @@ export const useDocument = create((set, get) => ({
 
   // Highlight fill opacity. Also patches a selected highlight.
   setHighlightOpacity(opacity) {
+    const { selectedId, annotations } = get();
+    if (selectedId && annotations.some((a) => a.id === selectedId && a.type === "highlight")) pushHistory();
     set((s) => {
       if (s.selectedId) {
         const annotations = s.annotations.map((a) =>
@@ -319,6 +355,25 @@ export const useDocument = create((set, get) => ({
         return { highlightOpacity: opacity, annotations, annotationsDirty: true };
       }
       return { highlightOpacity: opacity };
+    });
+  },
+
+  // Semi-transparent fill for shapes. Closed shapes (rect, ellipse,
+  // triangle, diamond, star) get filled; open strokes (check, cross)
+  // ignore it — filling a check mark would just smear it. Like color and
+  // thickness, it also patches a selected shape so you can fill a shape
+  // you already drew.
+  setShapeFilled(filled) {
+    const { selectedId, annotations } = get();
+    if (selectedId && annotations.some((a) => a.id === selectedId && a.type === "shape")) pushHistory();
+    set((s) => {
+      if (s.selectedId) {
+        const annotations = s.annotations.map((a) =>
+          a.id === s.selectedId && a.type === "shape" ? { ...a, filled } : a
+        );
+        return { shapeFilled: filled, annotations, annotationsDirty: true };
+      }
+      return { shapeFilled: filled };
     });
   },
 
@@ -355,6 +410,7 @@ export const useDocument = create((set, get) => ({
     // on the just-created box instead of finding the next line.
     const isCoverEdit = ann.type === "text" && ann.cover;
     const discrete = !isCoverEdit && ["text", "note", "stamp", "shape", "line", "arrow"].includes(ann.type);
+    pushHistory({ id, coalesceMs: COALESCE_MS });
     set((s) => ({
       annotations: [...s.annotations, withMeta],
       selectedId: id,
@@ -365,6 +421,11 @@ export const useDocument = create((set, get) => ({
   },
 
   updateAnnotation(id, patch) {
+    // Pure focus/blur bookkeeping (the `editing` flag) is not an undoable
+    // change; everything else coalesces per object for COALESCE_MS, so one
+    // drag or one typing burst is a single undo step.
+    const onlyEditing = Object.keys(patch).length === 1 && "editing" in patch;
+    if (!onlyEditing) pushHistory({ id, coalesceMs: COALESCE_MS });
     set((s) => ({
       annotations: s.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)),
       annotationsDirty: true,
@@ -376,6 +437,7 @@ export const useDocument = create((set, get) => ({
   },
 
   deleteAnnotation(id) {
+    pushHistory({ id });
     set((s) => ({
       annotations: s.annotations.filter((a) => a.id !== id),
       selectedId: s.selectedId === id ? null : s.selectedId,
@@ -384,6 +446,8 @@ export const useDocument = create((set, get) => ({
   },
 
   clearAnnotations() {
+    if (get().annotations.length === 0) return;
+    pushHistory({ id: null });
     set({ annotations: [], selectedId: null, annotationsDirty: true });
   },
 
@@ -393,6 +457,35 @@ export const useDocument = create((set, get) => ({
 
   isAnnotationsDirty() {
     return get().annotationsDirty;
+  },
+
+  // ---- undo / redo (annotation layer, capped at HISTORY_LIMIT steps) ----
+  undo() {
+    const { history, annotations, selectedId } = get();
+    if (history.past.length === 0) return;
+    const past = history.past.slice();
+    const prev = past.pop();
+    lastHistoryPush = { id: null, at: 0 };
+    set({
+      annotations: prev,
+      history: { past, future: [...history.future, annotations].slice(-HISTORY_LIMIT) },
+      selectedId: prev.some((a) => a.id === selectedId) ? selectedId : null,
+      annotationsDirty: true,
+    });
+  },
+
+  redo() {
+    const { history, annotations, selectedId } = get();
+    if (history.future.length === 0) return;
+    const future = history.future.slice();
+    const next = future.pop();
+    lastHistoryPush = { id: null, at: 0 };
+    set({
+      annotations: next,
+      history: { past: [...history.past, annotations].slice(-HISTORY_LIMIT), future },
+      selectedId: next.some((a) => a.id === selectedId) ? selectedId : null,
+      annotationsDirty: true,
+    });
   },
 
   async saveAnnotations() {
@@ -426,6 +519,7 @@ export const useDocument = create((set, get) => ({
   },
 
   reset() {
+    lastHistoryPush = { id: null, at: 0 };
     set({
       doc: null,
       plan: [],
@@ -437,6 +531,8 @@ export const useDocument = create((set, get) => ({
       tool: "select",
       annotationsDirty: false,
       zoom: 1,
+      history: { past: [], future: [] },
     });
   },
-}));
+  };
+});
