@@ -69,6 +69,10 @@ class Annotation(BaseModel):
     # patch behind the text first, so it visually replaces existing PDF
     # content rather than overlaying on top of it
     cover: bool = False
+    # when true (only meaningful for type == "shape"): draw the shape with a
+    # semi-transparent fill of its own color in addition to the outline
+    # (closed shapes only — open strokes like check/cross ignore it)
+    filled: bool = False
 
 
 class ApplyAnnotationsRequest(BaseModel):
