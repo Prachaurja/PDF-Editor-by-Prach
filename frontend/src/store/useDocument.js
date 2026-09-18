@@ -48,7 +48,10 @@ function fromBackend(a) {
     cover: a.cover ?? false,
     coverColor: a.cover_color || undefined,
     bgColor: a.bg_color || undefined,
-    bullet: a.bullet ?? false,
+    // Bullet marker style ("round" | "open" | "square" | "dash" |
+    // "triangle" | "star"). Older payloads sent a plain `true` — read it
+    // as the classic round dot.
+    bullet: a.bullet === true ? "round" : a.bullet || undefined,
     createdAt: a.created_at || new Date().toISOString(),
   };
 }
@@ -77,7 +80,7 @@ function toBackend(a) {
     cover: a.cover ?? false,
     cover_color: a.coverColor ?? null,
     bg_color: a.bgColor ?? null,
-    bullet: a.bullet ?? false,
+    bullet: a.bullet ?? null,
     created_at: a.createdAt || null,
   };
 }
@@ -125,7 +128,9 @@ export const useDocument = create((set, get) => {
   // keeps the classic chrome-less look; cover edits fall back to white,
   // because a redaction must always paint something over the old line.
   textBgColor: "transparent",
-  textStyle: { fontSize: 14, bold: false, italic: false, bullet: false, align: "left", fontFamily: "Helvetica" },
+  // textStyle.bullet = marker style for NEW text boxes ("round", "open",
+  // "square", "dash", "triangle", "star") or undefined = no bullet.
+  textStyle: { fontSize: 14, bold: false, italic: false, bullet: undefined, align: "left", fontFamily: "Helvetica" },
   lineWidth: 2, // pen/shape/line/arrow thickness, PDF points (1-4)
   highlightOpacity: 0.3, // highlight fill opacity (0.15 light / 0.3 medium / 0.5 strong)
   stampLabel: "APPROVED", // label the Stamp tool applies
@@ -318,18 +323,45 @@ export const useDocument = create((set, get) => {
     });
   },
 
+  // MAIN swatch row = the INK for the drawing tools (pen, highlight,
+  // shapes, lines, notes, stamps). With a drawing mark selected it
+  // recolors THAT mark. It deliberately does NOT touch a selected text
+  // box — text has its own color picker (setTextColor) and its own
+  // background picker (setTextBgColor), so font color and background
+  // color can no longer move together.
   setColor(color) {
     const { selectedId, annotations } = get();
-    if (selectedId && annotations.some((a) => a.id === selectedId)) pushHistory();
+    const selIsText = selectedId && annotations.some((a) => a.id === selectedId && a.type === "text");
+    if (selectedId && !selIsText && annotations.some((a) => a.id === selectedId)) pushHistory();
     set((s) => {
       if (s.selectedId) {
         const annotations = s.annotations.map((a) =>
-          a.id === s.selectedId ? { ...a, color } : a
+          a.id === s.selectedId && a.type !== "text" ? { ...a, color } : a
         );
         return { color, annotations, annotationsDirty: true };
       }
       return { color };
     });
+  },
+
+  // TEXT color — the "A" picker in the text cluster. Separate from the
+  // drawing ink above and from the background color. With a text box
+  // selected it recolors THAT box (plain box or edited line); with
+  // nothing selected it sets the ink new text boxes are created with.
+  setTextColor(color) {
+    const { selectedId, annotations } = get();
+    const sel = annotations.find((a) => a.id === selectedId && a.type === "text");
+    if (sel) {
+      pushHistory({ id: sel.id });
+      set((s) => ({
+        annotations: s.annotations.map((a) =>
+          a.id === s.selectedId && a.type === "text" ? { ...a, color } : a
+        ),
+        annotationsDirty: true,
+      }));
+      return;
+    }
+    set({ color });
   },
   // Line thickness for pen/shape/line/arrow. Like color, it also patches
   // the currently selected (line-type) annotation so you can re-thicken a
@@ -409,21 +441,15 @@ export const useDocument = create((set, get) => {
       createdAt: new Date().toISOString(),
       ...ann,
     };
-    // Discrete, single-object tools drop back to Select so the new object
-    // can be moved/resized right away. Marking tools (highlight, underline,
-    // strike, pen) stay active so you can keep marking without re-selecting.
-    // Existing-line edits (type "text" with cover:true) are also excluded —
-    // that tool is meant for clicking through several lines in a row, and
-    // reverting to Select after the first click made the second click land
-    // on the just-created box instead of finding the next line.
-    const isCoverEdit = ann.type === "text" && ann.cover;
-    const discrete = !isCoverEdit && ["text", "note", "stamp", "shape", "line", "arrow"].includes(ann.type);
+    // The tool stays ARMED after placement (no revert to Select): you can
+    // put down several text boxes, stamps, shapes, lines in a row without
+    // re-picking the tool each time. Press Esc — or click Select — to
+    // switch back to selection/move mode.
     pushHistory({ id, coalesceMs: COALESCE_MS });
     set((s) => ({
       annotations: [...s.annotations, withMeta],
       selectedId: id,
       annotationsDirty: true,
-      tool: discrete ? "select" : s.tool,
     }));
     return id;
   },
@@ -531,7 +557,6 @@ export const useDocument = create((set, get) => {
     set({
       doc: null,
       plan: [],
-      currentPage: 0,
       error: null,
       splitResult: null,
       annotations: [],
