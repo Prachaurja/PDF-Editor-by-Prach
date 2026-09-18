@@ -60,8 +60,8 @@ export default function CommentsPanel() {
       <div className="comments-scroll">
         {annotations.length === 0 ? (
           <div className="comments-empty">
-            Nothing yet. Pick a tool above and mark up the page — highlights,
-            notes and stamps will show up here.
+            Nothing yet. Pick a tool above and mark up the page - Highlights,
+            Notes and Stamps will show up here.
           </div>
         ) : (
           <div className="comments-list">
