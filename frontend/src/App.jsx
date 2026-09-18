@@ -1,6 +1,6 @@
 import { useDocument } from "./store/useDocument";
-import Toolbar from "./components/Toolbar/Toolbar";
-import AnnotationToolbar from "./components/Annotate/AnnotationToolbar";
+import TitleBar from "./components/Ribbon/TitleBar";
+import Ribbon from "./components/Ribbon/Ribbon";
 import ThumbnailRail from "./components/Sidebar/ThumbnailRail";
 import PageCanvas from "./components/Viewer/PageCanvas";
 import CommentsPanel from "./components/Annotate/CommentsPanel";
@@ -14,8 +14,8 @@ export default function App() {
 
   return (
     <div className="app">
-      <Toolbar />
-      {doc && <AnnotationToolbar />}
+      <TitleBar />
+      {doc && <Ribbon />}
       <SplitBanner />
       <div className="workspace">
         {doc ? (
