@@ -87,21 +87,29 @@ def _new_output_path() -> tuple[str, Path]:
     return file_id, PROCESSED_DIR / f"{file_id}.pdf"
 
 
-def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float) -> None:
-    """Draw a vector shape onto the page (burned in)."""
+def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float,
+                filled: bool = False) -> None:
+    """Draw a vector shape onto the page (burned in).
+
+    When `filled` is set, CLOSED shapes (rect, ellipse, triangle, diamond,
+    star) also get a semi-transparent fill of the same color as the outline
+    — the "emphasis box" look. Open strokes (check, cross) ignore it:
+    filling a check mark would just smear it into a blob.
+    """
     x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    fill_kw = {"fill": color, "fill_opacity": 0.25} if filled else {}
 
     if shape == "rect":
-        page.draw_rect(rect, color=color, width=width)
+        page.draw_rect(rect, color=color, width=width, **fill_kw)
     elif shape == "ellipse":
-        page.draw_oval(rect, color=color, width=width)
+        page.draw_oval(rect, color=color, width=width, **fill_kw)
     elif shape == "triangle":
         pts = [fitz.Point(cx, y0), fitz.Point(x1, y1), fitz.Point(x0, y1)]
-        page.draw_polyline(pts + [pts[0]], color=color, width=width)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
     elif shape == "diamond":
         pts = [fitz.Point(cx, y0), fitz.Point(x1, cy), fitz.Point(cx, y1), fitz.Point(x0, cy)]
-        page.draw_polyline(pts + [pts[0]], color=color, width=width)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
     elif shape == "star":
         import math
         pts = []
@@ -110,7 +118,7 @@ def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float) -> Non
             ang = math.pi / 5 * i - math.pi / 2
             r = 1 if i % 2 == 0 else 0.42
             pts.append(fitz.Point(cx + math.cos(ang) * rx * r, cy + math.sin(ang) * ry * r))
-        page.draw_polyline(pts + [pts[0]], color=color, width=width)
+        page.draw_polyline(pts + [pts[0]], color=color, width=width, **fill_kw)
     elif shape == "check":
         pts = [fitz.Point(x0, cy), fitz.Point(x0 + (x1 - x0) * 0.4, y1), fitz.Point(x1, y0)]
         page.draw_polyline(pts, color=color, width=width)
@@ -119,7 +127,6 @@ def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float) -> Non
         page.draw_line(fitz.Point(x1, y0), fitz.Point(x0, y1), color=color, width=width)
     else:
         page.draw_rect(rect, color=color, width=width)
-
 
 def _text_box_rect(ann: Annotation) -> "fitz.Rect":
     """The box used for both drawing an annotation's text and, for a cover
@@ -260,7 +267,7 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 annot.update()
 
             elif ann.type == "shape" and ann.rects:
-                _draw_shape(page, ann.shape or "rect", fitz.Rect(ann.rects[0]), color, ann.width)
+                _draw_shape(page, ann.shape or "rect", fitz.Rect(ann.rects[0]), color, ann.width, ann.filled)
 
             elif ann.type == "text" and ann.x is not None and ann.y is not None:
                 fs = ann.font_size or 14
@@ -307,15 +314,33 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 annot.update()
 
             elif ann.type == "stamp" and ann.x is not None and ann.y is not None:
-                # Draw a bordered label directly onto the page (reliable across
-                # PyMuPDF versions, unlike FreeText annotation styling).
-                label = ann.text or "APPROVED"
-                box = fitz.Rect(ann.x, ann.y, ann.x + 130, ann.y + 26)
-                page.draw_rect(box, color=color, width=1.2)
-                page.insert_textbox(
-                    box, label, fontsize=11, color=color,
-                    align=fitz.TEXT_ALIGN_CENTER,
-                )
+                label = (ann.text or "APPROVED").strip()
+                # Standalone check / cross marks: drawn as VECTORS, not text —
+                # the base-14 PDF fonts have no ✔/✘ glyph, so text would come
+                # out as a missing-glyph box. No border either: the mark
+                # stands on its own, sized to sit inside a checkbox.
+                if label in ("\u2714", "\u2713", "\u2714\ufe0e"):
+                    s = 16.0
+                    pts = [
+                        fitz.Point(ann.x, ann.y + s * 0.55),
+                        fitz.Point(ann.x + s * 0.35, ann.y + s * 0.85),
+                        fitz.Point(ann.x + s, ann.y),
+                    ]
+                    page.draw_polyline(pts, color=color, width=2.5)
+                elif label in ("\u2718", "\u2717", "\u2718\ufe0e"):
+                    s = 16.0
+                    page.draw_line(fitz.Point(ann.x, ann.y), fitz.Point(ann.x + s, ann.y + s), color=color, width=2.5)
+                    page.draw_line(fitz.Point(ann.x + s, ann.y), fitz.Point(ann.x, ann.y + s), color=color, width=2.5)
+                else:
+                    # Regular word stamps: a bordered label drawn directly
+                    # onto the page (reliable across PyMuPDF versions, unlike
+                    # FreeText annotation styling).
+                    box = fitz.Rect(ann.x, ann.y, ann.x + 130, ann.y + 26)
+                    page.draw_rect(box, color=color, width=1.2)
+                    page.insert_textbox(
+                        box, label, fontsize=11, color=color,
+                        align=fitz.TEXT_ALIGN_CENTER,
+                    )
 
         file_id, dest = _new_output_path()
         doc.save(dest)
