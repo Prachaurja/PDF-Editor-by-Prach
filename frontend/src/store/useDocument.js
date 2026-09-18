@@ -46,7 +46,9 @@ function fromBackend(a) {
     h: a.h ?? undefined,
     opacity: a.opacity ?? undefined,
     cover: a.cover ?? false,
-    filled: a.filled ?? false,
+    coverColor: a.cover_color || undefined,
+    bgColor: a.bg_color || undefined,
+    bullet: a.bullet ?? false,
     createdAt: a.created_at || new Date().toISOString(),
   };
 }
@@ -73,7 +75,9 @@ function toBackend(a) {
     h: a.h ?? null,
     opacity: a.opacity ?? null,
     cover: a.cover ?? false,
-    filled: a.filled ?? false,
+    cover_color: a.coverColor ?? null,
+    bg_color: a.bgColor ?? null,
+    bullet: a.bullet ?? false,
     created_at: a.createdAt || null,
   };
 }
@@ -116,9 +120,12 @@ export const useDocument = create((set, get) => {
   // ---- annotations (Slice 3) ----
   tool: "select", // active annotation tool
   shape: "rect", // active shape when tool === "shape"
-  shapeFilled: false, // filled (semi-transparent) shapes — closed shapes only
   color: "#0f6b62", // active color
-  textStyle: { fontSize: 14, bold: false, italic: false, align: "left", fontFamily: "Helvetica" },
+  // Active background for NEW text boxes / edited lines. "transparent"
+  // keeps the classic chrome-less look; cover edits fall back to white,
+  // because a redaction must always paint something over the old line.
+  textBgColor: "transparent",
+  textStyle: { fontSize: 14, bold: false, italic: false, bullet: false, align: "left", fontFamily: "Helvetica" },
   lineWidth: 2, // pen/shape/line/arrow thickness, PDF points (1-4)
   highlightOpacity: 0.3, // highlight fill opacity (0.15 light / 0.3 medium / 0.5 strong)
   stampLabel: "APPROVED", // label the Stamp tool applies
@@ -358,22 +365,23 @@ export const useDocument = create((set, get) => {
     });
   },
 
-  // Semi-transparent fill for shapes. Closed shapes (rect, ellipse,
-  // triangle, diamond, star) get filled; open strokes (check, cross)
-  // ignore it — filling a check mark would just smear it. Like color and
-  // thickness, it also patches a selected shape so you can fill a shape
-  // you already drew.
-  setShapeFilled(filled) {
+  // Background color for text boxes / edited lines. "transparent" = no
+  // background (the classic look). Like color, it also patches a selected
+  // text box — for an edited line it changes the patch color, so you can
+  // tune it until the edit blends into a non-white page background.
+  setTextBgColor(color) {
     const { selectedId, annotations } = get();
-    if (selectedId && annotations.some((a) => a.id === selectedId && a.type === "shape")) pushHistory();
+    if (selectedId && annotations.some((a) => a.id === selectedId && a.type === "text")) pushHistory();
     set((s) => {
       if (s.selectedId) {
-        const annotations = s.annotations.map((a) =>
-          a.id === s.selectedId && a.type === "shape" ? { ...a, filled } : a
-        );
-        return { shapeFilled: filled, annotations, annotationsDirty: true };
+        const annotations = s.annotations.map((a) => {
+          if (a.id !== s.selectedId || a.type !== "text") return a;
+          if (a.cover) return { ...a, coverColor: color === "transparent" ? "#ffffff" : color };
+          return { ...a, bgColor: color === "transparent" ? undefined : color };
+        });
+        return { textBgColor: color, annotations, annotationsDirty: true };
       }
-      return { shapeFilled: filled };
+      return { textBgColor: color };
     });
   },
 
