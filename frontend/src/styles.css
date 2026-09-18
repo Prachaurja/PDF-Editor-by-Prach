@@ -1125,3 +1125,63 @@ button {
      font-size: 18px;
      line-height: 1;
    }
+
+/* ---- Bullet points for text boxes / edited lines ---- */
+
+/* The marker sits just left of the text (the box indents to make room),
+   mirroring what the export prints: one bullet at the start of the text,
+   wrapped lines are not re-bulleted. */
+.text-box.bullet {
+  padding-left: 12px;
+}
+.text-box.bullet::before {
+  content: "\2022";
+  position: absolute;
+  left: 1px;
+  top: 0;
+  color: inherit;
+}
+.bullet-glyph { font-weight: 700; }
+
+/* ---- Text background color picker (Text box / Edit existing text) ---- */
+
+.bg-picker { position: relative; display: inline-flex; }
+.bg-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  padding: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.bg-btn:hover { background: var(--hover, rgba(0,0,0,0.05)); }
+.bg-swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+.bg-menu {
+  position: absolute;
+  top: 34px;
+  left: -6px;
+  z-index: 40;
+  background: var(--canvas);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  padding: 6px;
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  gap: 3px;
+  align-items: center;
+}
+.bg-item {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.bg-item.active { outline: 2px solid var(--accent); outline-offset: 1px; }
