@@ -232,8 +232,11 @@ export const useDocument = create((set, get) => ({
     }
   },
 
-  showToast(message) {
-    set({ toast: { message, id: Date.now() } });
+  // kind: "ok" (green check) or "error" (red, longer visible) — failures
+  // used to show only as tiny red text in the status bar, which is easy to
+  // miss, so e.g. a failed export looked like "the button does nothing".
+  showToast(message, kind = "ok") {
+    set({ toast: { message, kind, id: Date.now() } });
   },
 
   dismissToast() {
@@ -403,6 +406,7 @@ export const useDocument = create((set, get) => ({
       get().showToast("Marks Saved");
     } catch (e) {
       set({ error: e.message, saving: false });
+      get().showToast("Saving marks failed: " + e.message, "error");
     }
   },
 
@@ -413,10 +417,10 @@ export const useDocument = create((set, get) => ({
     try {
       const flat = await exportAnnotated(doc.file_id, annotations.map(toBackend));
       set({ saving: false, savedAt: Date.now(), annotationsDirty: false });
-      get().showToast("Exported - Download Starting");
-      return flat.file_id; // caller can download this flattened copy
+      return flat.file_id; // caller downloads this flattened copy
     } catch (e) {
       set({ error: e.message, saving: false });
+      get().showToast("Export failed: " + e.message, "error");
       return null;
     }
   },
