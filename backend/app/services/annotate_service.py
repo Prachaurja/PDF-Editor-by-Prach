@@ -1,4 +1,4 @@
-"""Slice 3: annotations.
+"""Slice 3: Annotations.
 
 Annotations arrive in PDF-space (points, top-left origin) and are burned into
 a new document with PyMuPDF. The original upload is never mutated — we copy it
@@ -119,6 +119,63 @@ def _draw_shape(page, shape: str, rect: "fitz.Rect", color, width: float) -> Non
         page.draw_line(fitz.Point(x1, y0), fitz.Point(x0, y1), color=color, width=width)
     else:
         page.draw_rect(rect, color=color, width=width)
+
+
+def _bullet_marker(page, box: "fitz.Rect", fs: float, color, style: str) -> None:
+    """Draw one bullet marker just left of the FIRST line of `box`.
+
+    Vectors, not characters: the base-14 PDF fonts render the "\u2022"
+    character as a tiny middle dot (verified by rendering), so every marker
+    style is a shape. Geometry is relative to the first line (box top +
+    one font size) and always fits inside the 0.9*fs text indent the
+    caller applies, so wrapped lines are never touched.
+    """
+    import math
+    x = box.x0
+    y = box.y0 + fs * 0.5  # mid-height of the first line
+
+    if style == "open":
+        page.draw_circle(
+            fitz.Point(x + fs * 0.32, y), fs * 0.13,
+            color=color, width=fs * 0.07, fill=None,
+        )
+    elif style == "square":
+        s = fs * 0.24
+        page.draw_rect(
+            fitz.Rect(x + fs * 0.22, y - s / 2, x + fs * 0.22 + s, y + s / 2),
+            color=None, fill=color,
+        )
+    elif style == "dash":
+        page.draw_line(
+            fitz.Point(x + fs * 0.14, y + fs * 0.03),
+            fitz.Point(x + fs * 0.56, y + fs * 0.03),
+            color=color, width=fs * 0.08,
+        )
+    elif style == "triangle":
+        page.draw_polyline(
+            [
+                fitz.Point(x + fs * 0.20, y - fs * 0.18),
+                fitz.Point(x + fs * 0.20, y + fs * 0.18),
+                fitz.Point(x + fs * 0.58, y),
+            ],
+            closePath=True, color=None, fill=color,
+        )
+    elif style == "star":
+        cx, cy = x + fs * 0.38, y
+        outer, inner = fs * 0.26, fs * 0.11
+        pts = []
+        for i in range(10):
+            ang = math.pi / 5 * i - math.pi / 2
+            r = outer if i % 2 == 0 else inner
+            pts.append(fitz.Point(cx + math.cos(ang) * r, cy + math.sin(ang) * r))
+        page.draw_polyline(pts, closePath=True, color=None, fill=color)
+    else:
+        # "round" (the classic bullet) and any unknown value
+        page.draw_circle(
+            fitz.Point(x + fs * 0.32, y), fs * 0.15,
+            color=None, fill=color,
+        )
+
 
 def _text_box_rect(ann: Annotation) -> "fitz.Rect":
     """The box used for both drawing an annotation's text and, for a cover
@@ -289,26 +346,24 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                 # boundary — not this possibly-taller draw box. So nothing
                 # to do here for that part — just draw the replacement text.
                 if text.strip():
-                    # Bullet point: draw a small filled CIRCLE left of the
-                    # first line and indent the text to make room — the same
-                    # one-marker look as the preview. The "\u2022" CHARACTER
-                    # can't be used: the built-in PDF base fonts render it as
-                    # a small middle dot, not a real bullet (verified —
-                    # even en/em dashes degrade the same way).
-                    if ann.bullet:
-                        page.draw_circle(
-                            fitz.Point(box.x0 + fs * 0.32, box.y0 + fs * 0.5),
-                            fs * 0.15,
-                            color=None, fill=color,
-                        )
-                        box = fitz.Rect(box.x0 + fs * 0.9, box.y0, box.x1, box.y1)
+                    # Order matters: background FIRST, then the bullet
+                    # marker (so it sits ON the tint), then the text.
                     # Opaque background behind a plain text box (the user's
                     # "text background" pick). Cover edits don't need this —
                     # their redaction already painted the patch.
                     if ann.bg_color:
                         page.draw_rect(box, color=None, fill=_hex_to_rgb(ann.bg_color))
+                    # Bullet: one marker left of the first line, text
+                    # indented to clear it — the vector equivalent of the
+                    # preview's CSS ::before marker (the "\u2022" character
+                    # can't be used: base-14 PDF fonts render it as a small
+                    # middle dot, not a real bullet).
+                    draw_box = box
+                    if ann.bullet:
+                        _bullet_marker(page, box, fs, color, ann.bullet)
+                        draw_box = fitz.Rect(box.x0 + fs * 0.9, box.y0, box.x1, box.y1)
                     rc = page.insert_textbox(
-                        box, text, fontsize=fs, fontname=fontname,
+                        draw_box, text, fontsize=fs, fontname=fontname,
                         color=color, align=align_map.get(ann.align, fitz.TEXT_ALIGN_LEFT),
                     )
                     if rc < 0:
@@ -318,7 +373,7 @@ def apply_annotations(source_path: Path, annotations: list[Annotation]) -> tuple
                         # here on purpose: this can only overlap whatever
                         # follows visually, never delete it, keeping the
                         # same safety guarantee as the main path above.
-                        taller = fitz.Rect(box.x0, box.y0, box.x1, box.y0 + h * 2 + 20)
+                        taller = fitz.Rect(box.x0, draw_box.y0, draw_box.x1, draw_box.y0 + h * 2 + 20)
                         if ann.bg_color:
                             page.draw_rect(taller, color=None, fill=_hex_to_rgb(ann.bg_color))
                         page.insert_textbox(
