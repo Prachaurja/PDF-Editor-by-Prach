@@ -65,10 +65,18 @@ export async function fetchPageLines(fileId, page) {
 
 // Merge another uploaded document into this one.
 export function mergeDocument(fileId, otherFileId, afterIndex) {
+function extractPages(fileId, pages) {
+  return postJSON(`${BASE}/pages/${fileId}/extract`, { pages });
+} 
   return postJSON(`${BASE}/pages/${fileId}/merge`, {
     other_file_id: otherFileId,
     after_index: afterIndex,
   });
+}
+
+// Extract specific pages (original indices) into a fresh document.
+export function extractPages(fileId, pages) {
+  return postJSON(`${BASE}/pages/${fileId}/extract`, { pages });
 }
 
 // Persist the editable annotation layer (annotations stay editable on reload).
