@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PageOp(BaseModel):
@@ -69,11 +69,13 @@ class Annotation(BaseModel):
     # patch behind the text first, so it visually replaces existing PDF
     # content rather than overlaying on top of it
     cover: bool = False
-    # when true (only meaningful for type == "text"): the text is a bullet
-    # item — the export draws one filled circle left of the first line and
-    # indents the text (the character "\u2022" can't be used: base-14 PDF
-    # fonts render it as a middle dot, not a bullet)
-    bullet: bool = False
+    # bullet marker for type == "text": "round" (filled dot — the classic
+    # bullet), "open" (open circle), "square", "dash", "triangle" or
+    # "star". None = no bullet. The export draws the marker as a vector
+    # (the character "\u2022" can't be used: base-14 PDF fonts render it
+    # as a middle dot, not a bullet). Older payloads sent true/false:
+    # true is read as "round", false as no bullet.
+    bullet: Optional[str] = None
     # background painted UNDER an edited (cover) line, in place of white —
     # pick a tone matching the page background so the edit blends in.
     # None = white (the classic behavior)
@@ -81,6 +83,17 @@ class Annotation(BaseModel):
     # opaque background color behind a plain text box (None = none,
     # text sits directly on the page)
     bg_color: Optional[str] = None
+
+    @field_validator("bullet", mode="before")
+    @classmethod
+    def _coerce_bullet(cls, v):
+        # Legacy payloads sent a plain boolean: true -> the classic round
+        # dot, false/None -> no bullet.
+        if v is True:
+            return "round"
+        if v is False or v is None:
+            return None
+        return v
 
 
 class ApplyAnnotationsRequest(BaseModel):
