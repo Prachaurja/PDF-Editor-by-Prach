@@ -24,7 +24,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
     addAnnotation, updateAnnotation, selectAnnotation, deleteAnnotation,
-    getPageLines, lineWidth, highlightOpacity, stampLabel,
+    getPageLines, lineWidth, highlightOpacity, stampLabel, shapeFilled,
   } = useDocument();
 
   const ref = useRef(null);
@@ -102,6 +102,19 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const isTextBand = ["highlight", "underline", "strike"].includes(tool);
 
   async function onPointerDown(e) {
+    // Eraser: a click on a mark (pen, shape, line, arrow, highlight,
+    // underline, strike) deletes that mark. Text boxes, notes and stamps
+    // have their own mousedown handlers that stop propagation, so the
+    // eraser can't touch them by accident.
+    if (tool === "eraser") {
+      const hit = e.target && e.target.closest ? e.target.closest("[data-ann-id]") : null;
+      if (hit) {
+        e.preventDefault();
+        // getAttribute returns a string; annotation ids are numbers
+        deleteAnnotation(Number(hit.getAttribute("data-ann-id")));
+      }
+      return;
+    }
     if (tool === "select") return;
     if (e.target.closest(".text-box")) return; // let text boxes handle themselves
     e.preventDefault();
@@ -301,7 +314,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
           addAnnotation({ type: draft.shape, page: currentPage, color, points: [[px0, py0], [px1, py1]], width: lineWidth });
         } else {
           const r = [Math.min(px0, px1), Math.min(py0, py1), Math.max(px0, px1), Math.max(py0, py1)];
-          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: lineWidth });
+          addAnnotation({ type: "shape", shape: draft.shape, page: currentPage, color, rects: [r], width: lineWidth, filled: shapeFilled });
         }
       }
     }
@@ -358,6 +371,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
             draft={draft} color={color} tool={tool}
             lineWidth={lineWidth} opacity={highlightOpacity}
             lineBoxScreen={draft.lineBox ? rectToBox(draft.lineBox) : null}
+            filled={shapeFilled}
           />
         )}
       </svg>
@@ -617,6 +631,9 @@ function NoteStampLabel({ a, lx, ly, selected, startDrag, onDelete, onTextChange
   const [val, setVal] = useState("");
   const isStamp = a.type === "stamp";
   const label = a.text || (isStamp ? "APPROVED" : "Note");
+  // Standalone ✔ / ✘ stamps: no border or white background — just the mark
+  // itself, sized to sit inside a checkbox on the page.
+  const isGlyph = label === "\u2714" || label === "\u2718";
 
   const commit = () => {
     setEditing(false);
@@ -626,7 +643,7 @@ function NoteStampLabel({ a, lx, ly, selected, startDrag, onDelete, onTextChange
 
   return (
     <div
-      className={`annot-label ${a.type} ${selected ? "selected" : ""} ${editing ? "editing" : ""}`}
+      className={`annot-label ${a.type} ${isGlyph ? "glyph" : ""} ${selected ? "selected" : ""} ${editing ? "editing" : ""}`}
       style={{ left: `${lx}%`, top: `${ly}%`, borderColor: a.color, color: a.color }}
       title={editing ? undefined : "Drag to move · Double-click to edit · Click to select"}
       onMouseDown={(e) => {
@@ -667,42 +684,88 @@ function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
   const stroke = a.color;
   const selStyle = selected ? { filter: "drop-shadow(0 0 1.5px rgba(0,0,0,0.4))" } : {};
   const click = { onMouseDown: onSelect, style: { cursor: "pointer", ...selStyle } };
+  // Preview stroke width: the stored value is in PDF points; 0.7 keeps the
+  // old 2pt -> 1.4px look as the "regular" default.
+  const strokeW = (a.width || 2) * 0.7;
 
   if (a.type === "highlight" && a.rects) {
     const b = rectToBox(a.rects[0]);
-    return <rect x={b.left} y={b.top} width={b.width} height={b.height} rx="0" fill={stroke} fillOpacity={a.opacity ?? 0.3} {...click} />;
+    return (
+      <g data-ann-id={a.id} {...click}>
+        <rect x={b.left} y={b.top} width={b.width} height={b.height} rx="0" fill={stroke} fillOpacity={a.opacity ?? 0.3} />
+      </g>
+    );
   }
   if ((a.type === "underline" || a.type === "strike") && a.rects) {
     const b = rectToBox(a.rects[0]);
     const y = a.type === "underline" ? b.top + b.height : b.top + b.height / 2;
-    return <line x1={b.left} y1={y} x2={b.left + b.width} y2={y} stroke={stroke} strokeWidth={selected ? 1 : 0.6} vectorEffect="non-scaling-stroke" {...click} />;
+    return (
+      <g data-ann-id={a.id} {...click}>
+        <line x1={b.left} y1={y} x2={b.left + b.width} y2={y} stroke={stroke} strokeWidth={selected ? 1 : 0.6} vectorEffect="non-scaling-stroke" />
+        <HitLine x1={b.left} y1={y} x2={b.left + b.width} y2={y} />
+      </g>
+    );
   }
-  // Preview stroke width: the stored value is in PDF points; 0.7 keeps the
-  // old 2pt -> 1.4px look as the "regular" default.
-  const strokeW = (a.width || 2) * 0.7;
   if (a.type === "pen" && a.points) {
     const pts = a.points.map((p) => pdfToPct(p[0], p[1]).join(",")).join(" ");
-    return <polyline points={pts} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" {...click} />;
+    return (
+      <g data-ann-id={a.id} {...click}>
+        <polyline points={pts} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+        <polyline points={pts} fill="none" stroke="transparent" strokeWidth={14} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" pointerEvents="stroke" />
+      </g>
+    );
   }
   if ((a.type === "line" || a.type === "arrow") && a.points) {
     const [x1, y1] = pdfToPct(a.points[0][0], a.points[0][1]);
     const [x2, y2] = pdfToPct(a.points[1][0], a.points[1][1]);
     return (
-      <g {...click}>
+      <g data-ann-id={a.id} {...click}>
         <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={stroke} strokeWidth={strokeW} vectorEffect="non-scaling-stroke" />
         {a.type === "arrow" && <Arrowhead x1={x1} y1={y1} x2={x2} y2={y2} color={stroke} />}
+        <HitLine x1={x1} y1={y1} x2={x2} y2={y2} />
       </g>
     );
   }
   if (a.type === "shape" && a.rects) {
     const b = rectToBox(a.rects[0]);
-    return <ShapeGlyph shape={a.shape} b={b} stroke={stroke} click={click} strokeWidth={strokeW} />;
+    return (
+      <g data-ann-id={a.id} {...click}>
+        <ShapeGlyph shape={a.shape} b={b} stroke={stroke} filled={!!a.filled} strokeWidth={strokeW} />
+        <ShapeHit shape={a.shape} b={b} />
+      </g>
+    );
   }
   return null;
 }
 
-function ShapeGlyph({ shape, b, stroke, click, strokeWidth = 1 }) {
-  const common = { fill: "none", stroke, strokeWidth, vectorEffect: "non-scaling-stroke", ...click };
+// Wide, invisible copy of a thin mark's geometry: thin strokes are
+// otherwise very hard to click (for the eraser, or to select). 14 screen
+// pixels of hit area around the ink — no visual change.
+function HitLine({ x1, y1, x2, y2 }) {
+  return <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={14} vectorEffect="non-scaling-stroke" pointerEvents="stroke" />;
+}
+
+// Invisible, oversized copy of a shape's geometry: lets the eraser (and
+// selection) catch clicks anywhere inside an unfilled shape, not just on
+// its 1px outline.
+function ShapeHit({ shape, b }) {
+  const hit = { fill: "transparent", stroke: "transparent", strokeWidth: 12, vectorEffect: "non-scaling-stroke", pointerEvents: "all" };
+  const { left: x, top: y, width: w, height: h } = b;
+  const cx = x + w / 2, cy = y + h / 2;
+  if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...hit} />;
+  if (shape === "ellipse") return <ellipse cx={cx} cy={cy} rx={w / 2} ry={h / 2} {...hit} />;
+  if (shape === "triangle") return <polygon points={`${cx},${y} ${x + w},${y + h} ${x},${y + h}`} {...hit} />;
+  if (shape === "diamond") return <polygon points={`${x},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} {...hit} />;
+  if (shape === "star") return <polygon points={starPoints(cx, cy, w / 2, h / 2)} {...hit} />;
+  if (shape === "check") return <polyline points={`${x},${cy} ${x + w * 0.4},${y + h} ${x + w},${y}`} {...hit} />;
+  if (shape === "cross") return <g pointerEvents="all"><line x1={x} y1={y} x2={x + w} y2={y + h} {...hit} /><line x1={x + w} y1={y} x2={x} y2={y + h} {...hit} /></g>;
+  return <rect x={x} y={y} width={w} height={h} {...hit} />;
+}
+
+function ShapeGlyph({ shape, b, stroke, filled, strokeWidth = 1 }) {
+  // Closed shapes can take a semi-transparent fill of their own color
+  // (the Fill toggle); open strokes (check/cross) stay outline-only.
+  const common = { fill: filled ? stroke : "none", fillOpacity: filled ? 0.25 : undefined, stroke, strokeWidth, vectorEffect: "non-scaling-stroke" };
   const { left: x, top: y, width: w, height: h } = b;
   const cx = x + w / 2, cy = y + h / 2;
   if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...common} />;
@@ -711,7 +774,7 @@ function ShapeGlyph({ shape, b, stroke, click, strokeWidth = 1 }) {
   if (shape === "diamond") return <polygon points={`${x},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} {...common} />;
   if (shape === "star") return <polygon points={starPoints(cx, cy, w / 2, h / 2)} {...common} />;
   if (shape === "check") return <polyline points={`${x},${cy} ${x + w * 0.4},${y + h} ${x + w},${y}`} {...common} />;
-  if (shape === "cross") return <g {...click}><line x1={x} y1={y} x2={x + w} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /><line x1={x + w} y1={y} x2={x} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /></g>;
+  if (shape === "cross") return <g><line x1={x} y1={y} x2={x + w} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /><line x1={x + w} y1={y} x2={x} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /></g>;
   return <rect x={x} y={y} width={w} height={h} {...common} />;
 }
 
@@ -732,7 +795,7 @@ function Arrowhead({ x1, y1, x2, y2, color }) {
   return <polyline points={`${x2 + len * Math.cos(a1)},${y2 + len * Math.sin(a1)} ${x2},${y2} ${x2 + len * Math.cos(a2)},${y2 + len * Math.sin(a2)}`} fill="none" stroke={color} strokeWidth={1.4} vectorEffect="non-scaling-stroke" />;
 }
 
-function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxScreen = null }) {
+function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxScreen = null, filled = false }) {
   const rect = draft.rect;
   const pct = (sx, sy) => [(sx / rect.width) * 100, (sy / rect.height) * 100];
   const draftW = (lineWidth || 2) * 0.7;
@@ -747,7 +810,7 @@ function DraftShape({ draft, color, tool, lineWidth = 2, opacity = 0.3, lineBoxS
       return <g><line x1={x0} y1={y0} x2={x1} y2={y1} stroke={color} strokeWidth={draftW} vectorEffect="non-scaling-stroke" />{draft.shape === "arrow" && <Arrowhead x1={x0} y1={y0} x2={x1} y2={y1} color={color} />}</g>;
     }
     const b = { left: Math.min(x0, x1), top: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0) };
-    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} click={{}} strokeWidth={draftW} />;
+    return <ShapeGlyph shape={draft.shape} b={b} stroke={color} filled={filled} strokeWidth={draftW} />;
   }
   let left = Math.min(x0, x1), top = Math.min(y0, y1), w = Math.abs(x1 - x0), h = Math.abs(y1 - y0);
   if (lineBoxScreen) {
