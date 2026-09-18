@@ -24,13 +24,15 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   const {
     tool, shape, color, textStyle, annotations, selectedId, currentPage,
     addAnnotation, updateAnnotation, selectAnnotation, deleteAnnotation,
-    getPageLines,  lineWidth, highlightOpacity, stampLabel, 
+    getPageLines, lineWidth, highlightOpacity, stampLabel,
   } = useDocument();
 
   const ref = useRef(null);
   const [draft, setDraft] = useState(null);
-  const [drag, setDrag] = useState(null); // dragging an existing text box
+  const [drag, setDrag] = useState(null); // dragging an existing object (text box / note / stamp)
   const [resize, setResize] = useState(null); // resizing a text box's width
+  const pendingDrag = useRef(null); // text box: click vs drag not yet decided
+  const textRefs = useRef({}); // id -> textarea element (enter/leave edit mode)
 
   const toScreen = useCallback((e) => {
     const rect = ref.current.getBoundingClientRect();
@@ -46,6 +48,56 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
     else if (pageEntry.rotation === 270) { ux = 1 - ny; uy = nx; }
     return [ux * pdfWidth, uy * pdfHeight];
   }, [pageEntry.rotation, pdfWidth, pdfHeight]);
+
+  // Record the grab geometry for `id` from a pointer position. Shared by
+  // immediate drags (notes/stamps, non-text tools) and by the confirmed
+  // click-vs-drag of text boxes under the text tools.
+  const beginDrag = (id, leftPct, topPct, clientX, clientY) => {
+    const rect = ref.current.getBoundingClientRect();
+    const grabX = clientX - rect.x - (leftPct / 100) * rect.width;
+    const grabY = clientY - rect.y - (topPct / 100) * rect.height;
+    setDrag({ id, grabX, grabY });
+    return { grabX, grabY };
+  };
+
+  // Move the dragged object so the grabbed point follows the pointer.
+  const applyDragMove = (id, grabX, grabY, e) => {
+    const rect = ref.current.getBoundingClientRect();
+    const x = e.clientX - rect.x;
+    const y = e.clientY - rect.y;
+    const [px, py] = screenToPdf(x - grabX, y - grabY, rect);
+    updateAnnotation(id, { x: px, y: py });
+  };
+
+  // Start dragging an object that stores its position as x/y in PDF space
+  // (notes, stamps, and text boxes under non-text tools, where a grab means
+  // "move"). preventDefault keeps the caret out of the way while dragging.
+  const startObjectDrag = (e, id, leftPct, topPct) => {
+    e.preventDefault();
+    beginDrag(id, leftPct, topPct, e.clientX, e.clientY);
+    selectAnnotation(id);
+  };
+
+  // Text tools (Text box / Edit existing text): a press on a box might be a
+  // CLICK (re-enter edit mode) or a DRAG (move the box). We cannot tell on
+  // mousedown, so we record the start and decide in onPointerMove once the
+  // pointer has clearly moved. The caret is left alone on purpose — that is
+  // what makes a plain click put you straight into typing.
+  const beginPendingDrag = (e, id, leftPct, topPct) => {
+    pendingDrag.current = { id, leftPct, topPct, startX: e.clientX, startY: e.clientY };
+  };
+
+  // While the pointer is down on a text box (before we know whether it will
+  // be a click or a drag), turn text selection off — otherwise a drag would
+  // highlight text first and fight the box move. Restored on mouseup,
+  // mouseleave, or the moment the drag is confirmed.
+  const setBoxTextSelect = (id, allowed) => {
+    const ta = textRefs.current[id];
+    if (!ta) return;
+    const val = allowed ? "" : "none";
+    ta.style.userSelect = val;
+    if (ta.parentElement) ta.parentElement.style.userSelect = val;
+  };
 
   const isTextBand = ["highlight", "underline", "strike"].includes(tool);
 
@@ -156,6 +208,21 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   }
 
   function onPointerMove(e) {
+    if (pendingDrag.current) {
+      const p = pendingDrag.current;
+      // Pointer clearly moved -> it was a drag, not a click: move the box.
+      if (Math.hypot(e.clientX - p.startX, e.clientY - p.startY) > 4) {
+        pendingDrag.current = null;
+        setBoxTextSelect(p.id, true);
+        const { grabX, grabY } = beginDrag(p.id, p.leftPct, p.topPct, p.startX, p.startY);
+        selectAnnotation(p.id);
+        textRefs.current[p.id]?.blur(); // drop the caret while moving
+        // Apply the movement that already happened, so a fast flick moves
+        // the box even if there are no further mousemove events.
+        applyDragMove(p.id, grabX, grabY, e);
+      }
+      return;
+    }
     if (resize) {
       const rect = ref.current.getBoundingClientRect();
       const deltaScreen = e.clientX - resize.startClientX;
@@ -165,9 +232,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
       return;
     }
     if (drag) {
-      const { x, y, rect } = toScreen(e);
-      const [px, py] = screenToPdf(x - drag.grabX, y - drag.grabY, rect);
-      updateAnnotation(drag.id, { x: px, y: py });
+      applyDragMove(drag.id, drag.grabX, drag.grabY, e);
       return;
     }
     if (!draft) return;
@@ -178,7 +243,17 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
 
   function onPointerUp() {
     if (resize) { setResize(null); return; }
-    if (drag) { setDrag(null); return; }
+    if (drag) { setBoxTextSelect(drag.id, true); setDrag(null); return; }
+    if (pendingDrag.current) {
+      // Released without moving: it was a click. Restore text selection and
+      // make sure the caret is in the box so the user can type (no-op if the
+      // click already landed on the textarea and it focused itself).
+      const id = pendingDrag.current.id;
+      pendingDrag.current = null;
+      setBoxTextSelect(id, true);
+      textRefs.current[id]?.focus();
+      return;
+    }
     if (!draft) return;
     const rect = draft.rect;
 
@@ -256,11 +331,19 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
     <div
       ref={ref}
       className="annot-overlay"
-      style={{ cursor }}
+      style={{ cursor: drag ? "grabbing" : cursor }}
       onMouseDown={onPointerDown}
       onMouseMove={onPointerMove}
       onMouseUp={onPointerUp}
-      onMouseLeave={() => { if (draft) onPointerUp(); if (drag) setDrag(null); if (resize) setResize(null); }}
+      onMouseLeave={() => {
+        if (draft) onPointerUp();
+        if (drag) setDrag(null);
+        if (resize) setResize(null);
+        if (pendingDrag.current) {
+          setBoxTextSelect(pendingDrag.current.id, true);
+          pendingDrag.current = null;
+        }
+      }}
     >
       <svg className="annot-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
         {pageAnns.map((a) => (
@@ -270,7 +353,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
             onSelect={() => tool === "select" && selectAnnotation(a.id)}
           />
         ))}
-       {draft && (
+        {draft && (
           <DraftShape
             draft={draft} color={color} tool={tool}
             lineWidth={lineWidth} opacity={highlightOpacity}
@@ -309,23 +392,15 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
               pdfWidth={pdfWidth}
               selected={a.id === selectedId}
               selectTool={tool === "select"}
+              editOnClick={tool === "text" || tool === "edit-line"}
               onSelect={() => selectAnnotation(a.id)}
               onChange={(text) => updateAnnotation(a.id, { text })}
               onEditDone={() => updateAnnotation(a.id, { editing: false })}
               onDelete={() => deleteAnnotation(a.id)}
-              startDrag={(e) => {
-                if (tool !== "select") return;
-                const rect = ref.current.getBoundingClientRect();
-                // record where in the box the grab happened, in screen px
-                const boxX = (lx / 100) * rect.width;
-                const boxY = (ly / 100) * rect.height;
-                setDrag({
-                  id: a.id,
-                  grabX: e.clientX - rect.x - boxX,
-                  grabY: e.clientY - rect.y - boxY,
-                });
-                selectAnnotation(a.id);
-              }}
+              startDrag={(e) => startObjectDrag(e, a.id, lx, ly)}
+              beginPendingDrag={(e) => beginPendingDrag(e, a.id, lx, ly)}
+              onEditRef={(el) => { textRefs.current[a.id] = el; }}
+              setBoxTextSelect={setBoxTextSelect}
               startResize={(e) => {
                 setResize({ id: a.id, startClientX: e.clientX, startW: a.w || 180 });
               }}
@@ -335,21 +410,21 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
         );
       })}
 
-      {/* Notes & stamps as HTML labels */}
+      {/* Notes & stamps: drag to move (any tool), double-click to edit the
+          text, × (when selected) to delete. */}
       {pageAnns.filter((a) => a.type === "note" || a.type === "stamp").map((a) => {
         const [lx, ly] = pdfToPct(a.x, a.y);
         return (
-          <div
+          <NoteStampLabel
             key={`lbl-${a.id}`}
-            className={`annot-label ${a.type} ${a.id === selectedId ? "selected" : ""}`}
-            style={{ left: `${lx}%`, top: `${ly}%`, borderColor: a.color, color: a.color }}
-            onMouseDown={(e) => { e.stopPropagation(); if (tool === "select") selectAnnotation(a.id); }}
-          >
-            {a.type === "stamp" ? a.text || "APPROVED" : a.text || "Note"}
-            {a.id === selectedId && (
-              <button className="mini-del" onMouseDown={(e) => { e.stopPropagation(); deleteAnnotation(a.id); }}>×</button>
-            )}
-          </div>
+            a={a}
+            lx={lx}
+            ly={ly}
+            selected={a.id === selectedId}
+            startDrag={startObjectDrag}
+            onDelete={deleteAnnotation}
+            onTextChange={(id, text) => updateAnnotation(id, { text })}
+          />
         );
       })}
 
@@ -374,7 +449,7 @@ export default function AnnotationOverlay({ pageEntry, pdfWidth, pdfHeight }) {
   );
 }
 
-function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, onChange, onEditDone, onDelete, startDrag, startResize, onHeightChange }) {
+function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, editOnClick, onSelect, onChange, onEditDone, onDelete, startDrag, beginPendingDrag, onEditRef, setBoxTextSelect, startResize, onHeightChange }) {
   const boxRef = useRef(null);
   const taRef = useRef(null);
   const [px, setPx] = useState(a.fontSize || 14);
@@ -436,7 +511,9 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
     fontWeight: a.bold ? 700 : 400,
     fontStyle: a.italic ? "italic" : "normal",
     textAlign: a.align || "left",
-    cursor: selectTool ? "move" : "text",
+    // Grab cursor on every tool that moves the box; text cursor when the
+    // click is meant to edit (Text tool).
+    cursor: editOnClick ? "text" : "grab",
     // No background on the box itself. For edit-line (cover) annotations a
     // separate .cover-patch div — sized to the original line exactly — hides
     // the old text. That's what makes it look like the line itself is
@@ -449,14 +526,33 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
       ref={boxRef}
       className={`text-box ${selected ? "selected" : ""} ${a.cover ? "cover" : ""}`}
       style={style}
+      title={editOnClick ? undefined : "Drag to move · Double-click to edit"}
       onMouseDown={(e) => {
         e.stopPropagation();
-        if (selectTool) startDrag(e);
-        else onSelect();
+        if (editOnClick) {
+          // Text box / Edit existing text tool: a plain click re-enters
+          // EDIT mode (no preventDefault, so the caret can appear), while a
+          // press-and-move turns into a DRAG of the box — decided in
+          // onPointerMove once the pointer has clearly moved.
+          onSelect();
+          setBoxTextSelect(a.id, false);
+          beginPendingDrag(e);
+        } else {
+          // Every other tool: grab and move.
+          startDrag(e);
+        }
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        // Re-enter edit mode from any tool without re-picking one.
+        taRef.current?.focus();
       }}
     >
       <textarea
-        ref={taRef}
+        ref={(el) => {
+          taRef.current = el;
+          onEditRef?.(el);
+        }}
         value={a.text}
         placeholder="Type here"
         autoFocus={a.editing}
@@ -469,10 +565,19 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
         }}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onEditDone}
-        onMouseDown={(e) => { if (!selectTool) e.stopPropagation(); }}
+        /* no onMouseDown on purpose: the press must bubble to the box,
+           which decides click = edit vs drag = move (text tools), or
+           starts the drag (other tools, preventDefault keeps caret away). */
         rows={1}
         style={{
+          // The textarea must take EVERY font property from the box.
+          // Browsers give form controls their own default font (the UA
+          // `font:` shorthand resets font-style to normal), so without
+          // these explicit inherits the text would never look italic and
+          // never follow the chosen font, no matter what the box says.
+          fontFamily: "inherit",
           fontWeight: "inherit",
+          fontStyle: "inherit",
           textAlign: "inherit",
           color: "inherit",
           fontSize: "inherit",
@@ -501,6 +606,63 @@ function TextBox({ a, lx, ly, wPct, pdfWidth, selected, selectTool, onSelect, on
   );
 }
 
+/* Notes & stamps, as small draggable labels.
+ * - Drag the label to move it (works with ANY tool active).
+ * - Double-click to edit the text inline (Enter or click-away saves, Esc cancels).
+ * - Select it (single click) and the × button appears to delete.
+ * Before this, a note was "set and forget": placed once, it could neither
+ * be moved nor have its text changed, which is why it felt dead. */
+function NoteStampLabel({ a, lx, ly, selected, startDrag, onDelete, onTextChange }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState("");
+  const isStamp = a.type === "stamp";
+  const label = a.text || (isStamp ? "APPROVED" : "Note");
+
+  const commit = () => {
+    setEditing(false);
+    const t = val.trim();
+    if (t && t !== label) onTextChange(a.id, t);
+  };
+
+  return (
+    <div
+      className={`annot-label ${a.type} ${selected ? "selected" : ""} ${editing ? "editing" : ""}`}
+      style={{ left: `${lx}%`, top: `${ly}%`, borderColor: a.color, color: a.color }}
+      title={editing ? undefined : "Drag to move · Double-click to edit · Click to select"}
+      onMouseDown={(e) => {
+        if (editing) return;
+        e.stopPropagation();
+        startDrag(e, a.id, lx, ly);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setVal(label);
+        setEditing(true);
+      }}
+    >
+      {editing ? (
+        <input
+          className="note-edit"
+          autoFocus
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <span className="annot-label-text">{label}</span>
+      )}
+      {selected && !editing && (
+        <button className="mini-del" title="Delete" onMouseDown={(e) => { e.stopPropagation(); onDelete(a.id); }}>×</button>
+      )}
+    </div>
+  );
+}
+
 function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
   const stroke = a.color;
   const selStyle = selected ? { filter: "drop-shadow(0 0 1.5px rgba(0,0,0,0.4))" } : {};
@@ -515,9 +677,9 @@ function AnnotShape({ a, selected, rectToBox, pdfToPct, onSelect }) {
     const y = a.type === "underline" ? b.top + b.height : b.top + b.height / 2;
     return <line x1={b.left} y1={y} x2={b.left + b.width} y2={y} stroke={stroke} strokeWidth={selected ? 1 : 0.6} vectorEffect="non-scaling-stroke" {...click} />;
   }
- // Preview stroke width: the stored value is in PDF points; 0.7 keeps the
+  // Preview stroke width: the stored value is in PDF points; 0.7 keeps the
   // old 2pt -> 1.4px look as the "regular" default.
-  const strokeW = (a.width || 2) * 0.7; 
+  const strokeW = (a.width || 2) * 0.7;
   if (a.type === "pen" && a.points) {
     const pts = a.points.map((p) => pdfToPct(p[0], p[1]).join(",")).join(" ");
     return <polyline points={pts} fill="none" stroke={stroke} strokeWidth={strokeW} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" {...click} />;
@@ -546,7 +708,7 @@ function ShapeGlyph({ shape, b, stroke, click, strokeWidth = 1 }) {
   if (shape === "rect") return <rect x={x} y={y} width={w} height={h} {...common} />;
   if (shape === "ellipse") return <ellipse cx={cx} cy={cy} rx={w / 2} ry={h / 2} {...common} />;
   if (shape === "triangle") return <polygon points={`${cx},${y} ${x + w},${y + h} ${x},${y + h}`} {...common} />;
-  if (shape === "diamond") return <polygon points={`${cx},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} {...common} />;
+  if (shape === "diamond") return <polygon points={`${x},${y} ${x + w},${cy} ${cx},${y + h} ${x},${cy}`} {...common} />;
   if (shape === "star") return <polygon points={starPoints(cx, cy, w / 2, h / 2)} {...common} />;
   if (shape === "check") return <polyline points={`${x},${cy} ${x + w * 0.4},${y + h} ${x + w},${y}`} {...common} />;
   if (shape === "cross") return <g {...click}><line x1={x} y1={y} x2={x + w} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /><line x1={x + w} y1={y} x2={x} y2={y + h} stroke={stroke} strokeWidth={1} vectorEffect="non-scaling-stroke" /></g>;
