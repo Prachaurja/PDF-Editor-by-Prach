@@ -69,10 +69,18 @@ class Annotation(BaseModel):
     # patch behind the text first, so it visually replaces existing PDF
     # content rather than overlaying on top of it
     cover: bool = False
-    # when true (only meaningful for type == "shape"): draw the shape with a
-    # semi-transparent fill of its own color in addition to the outline
-    # (closed shapes only — open strokes like check/cross ignore it)
-    filled: bool = False
+    # when true (only meaningful for type == "text"): the text is a bullet
+    # item — the export draws one filled circle left of the first line and
+    # indents the text (the character "\u2022" can't be used: base-14 PDF
+    # fonts render it as a middle dot, not a bullet)
+    bullet: bool = False
+    # background painted UNDER an edited (cover) line, in place of white —
+    # pick a tone matching the page background so the edit blends in.
+    # None = white (the classic behavior)
+    cover_color: Optional[str] = None
+    # opaque background color behind a plain text box (None = none,
+    # text sits directly on the page)
+    bg_color: Optional[str] = None
 
 
 class ApplyAnnotationsRequest(BaseModel):
