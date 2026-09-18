@@ -109,3 +109,36 @@ def merge_documents(base_path: Path, other_path: Path, after_index: int) -> tupl
     finally:
         base.close()
         other.close()
+
+
+def extract_pages(source_path: Path, pages: list[int]) -> tuple[str, Path]:
+    """Copy the given source pages (in ascending order) into a fresh document.
+
+    Pages are referenced by their index in the ORIGINAL upload. Duplicates
+    are ignored; order in the output follows ascending index.
+    """
+    if not pages:
+        raise HTTPException(status_code=400, detail="Select at least one page to extract.")
+
+    src = open_pdf(source_path)
+    try:
+        ordered = sorted({p for p in pages if p is not None})
+        if not ordered:
+            raise HTTPException(status_code=400, detail="Select at least one page to extract.")
+        for p in ordered:
+            if p < 0 or p >= src.page_count:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Page {p + 1} does not exist in this document.",
+                )
+
+        out = fitz.open()
+        for p in ordered:
+            out.insert_pdf(src, from_page=p, to_page=p)
+
+        file_id, dest = _new_output_path()
+        out.save(dest)
+        out.close()
+        return file_id, dest
+    finally:
+        src.close()        
