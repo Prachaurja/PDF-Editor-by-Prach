@@ -2,14 +2,15 @@ import { useRef, useState } from "react";
 import { useDocument } from "../../store/useDocument";
 import { thumbnailUrl } from "../../api/client";
 
-/* The Pages ribbon tab — a Word/Google-Docs-style page manager:
- * grid of all pages with multi-select, and batch actions.
- *
- * - Click a card to (de)select it; the page also becomes the view page.
- * - Drag a card to reorder (same plan engine as the thumbnail rail).
- * - Actions work on the selection (Rotate/Delete/Extract) or the document
- *   (Insert/Merge/Split). Nothing is committed to the backend until you
- *   press "Save changes" — same stage-then-save model as before. */
+/* The Pages ribbon tab — the page manager:
+ *  - horizontal filmstrip of all pages (one row; scroll for big PDFs)
+ *  - CLICK a card to (de)select it (it also becomes the view page)
+ *  - DRAG a card to reorder it — pointer-based (press, move, release)
+ *    with a live drop-line showing exactly where the page will land.
+ *    Works anywhere: before page 1, between any two pages, at the end.
+ *  - batch actions on the selection (Rotate/Delete/Extract) or the
+ *    document (Insert/Merge/Split); commit staged changes with Save.
+ */
 export default function PagesRibbon() {
   const {
     doc,
@@ -34,8 +35,17 @@ export default function PagesRibbon() {
   } = useDocument();
   const insertRef = useRef(null);
   const mergeRef = useRef(null);
-  const [dragIndex, setDragIndex] = useState(null);
-  const [overIndex, setOverIndex] = useState(null);
+  const gridRef = useRef(null);
+  // Live drag state (mirrored in dragRef so pointer handlers never act on
+  // stale React state, and side-effects never run inside set-state
+  // updaters): { from, offsetX, offsetY, x, y, moved, width, height,
+  //              insert, lineX, lineTop, lineH } | null
+  const dragRef = useRef(null);
+  const [drag, setDragState] = useState(null);
+  const setDrag = (d) => {
+    dragRef.current = d;
+    setDragState(d);
+  };
 
   if (!doc) return null;
 
@@ -47,10 +57,117 @@ export default function PagesRibbon() {
   const splitAfter =
     n > 0 ? Math.min(Math.min(...pageSelection) + 1, plan.length - 1) : currentPage + 1;
 
-  function onDrop(to) {
-    if (dragIndex !== null && dragIndex !== to) movePage(dragIndex, to);
-    setDragIndex(null);
-    setOverIndex(null);
+  /* ---------------- pointer-based reorder ----------------
+   * HTML5 drag-and-drop (draggable + onDrop) silently cancels too often
+   * (native tooltips, React re-renders mid-drag, dropping on the gap
+   * between cards), so reordering is done with raw pointer events:
+   *   pointerdown on a card  -> start tracking
+   *   pointermove  (window)  -> move the ghost, compute the insertion
+   *                             slot from live card positions
+   *   pointerup    (window)  -> moved? commit movePage : treat as a
+   *                             click (select/deselect + view page)
+   */
+  function startDrag(e, i) {
+    if (e.button !== 0) return;
+    if (e.target.closest("button")) return; // per-card rotate/delete stay clickable
+    const rect = e.currentTarget.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    e.preventDefault(); // no text selection while dragging
+    setDrag({
+      from: i,
+      offsetX: startX - rect.left,
+      offsetY: startY - rect.top,
+      x: startX,
+      y: startY,
+      moved: false,
+      width: rect.width,
+      height: rect.height,
+      insert: null,
+      lineX: 0,
+      lineTop: 0,
+      lineH: 0,
+    });
+
+    // Insertion slot for a cursor x: count where x falls among the
+    // card boundaries (edges + midpoints of the gaps). The card being
+    // dragged stays in place (as a placeholder), so its slot is excluded.
+    function computeInsert(x) {
+      const els = gridRef.current
+        ? [...gridRef.current.querySelectorAll(".pg-card")]
+        : [];
+      const rects = els
+        .map((c, idx) => ({ idx, r: c.getBoundingClientRect() }))
+        .filter((o) => o.idx !== i)
+        .sort((a, b) => a.r.left - b.r.left);
+      if (!rects.length) return null;
+      const bounds = [rects[0].r.left - 6];
+      for (let j = 1; j < rects.length; j++) {
+        bounds.push((rects[j - 1].r.right + rects[j].r.left) / 2);
+      }
+      bounds.push(rects[rects.length - 1].r.right + 6);
+      let insert = bounds.length - 1;
+      for (let j = 0; j < bounds.length; j++) {
+        if (x < bounds[j]) {
+          insert = j;
+          break;
+        }
+      }
+      return {
+        insert,
+        lineX: bounds[insert] - 1.5,
+        lineTop: rects[0].r.top - 6,
+        lineH: rects[0].r.height + 12,
+      };
+    }
+
+    function onMove(ev) {
+      ev.preventDefault();
+      const d = dragRef.current;
+      if (!d) return;
+      const moved =
+        d.moved || Math.hypot(ev.clientX - startX, ev.clientY - startY) > 5;
+      if (!moved) {
+        setDrag({ ...d, x: ev.clientX, y: ev.clientY });
+        return;
+      }
+      setDrag({ ...d, x: ev.clientX, y: ev.clientY, moved: true, ...computeInsert(ev.clientX) });
+    }
+
+    function cleanup() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("blur", onCancel);
+    }
+
+    function onUp() {
+      cleanup();
+      const d = dragRef.current;
+      if (!d) return;
+      setDrag(null);
+      if (d.moved && d.insert !== null) {
+        // `insert` counts the placeholder card; after it is removed from
+        // the plan, slots after it shift one left.
+        const to = d.insert > d.from ? d.insert - 1 : d.insert;
+        if (to !== d.from) movePage(d.from, to);
+      } else if (!d.moved) {
+        // No real movement -> it was a click: select/deselect + view.
+        togglePageSelection(d.from);
+        setPage(d.from);
+      }
+    }
+
+    function onCancel() {
+      // Pointercancel / window blur: abort without moving or selecting.
+      cleanup();
+      setDrag(null);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("blur", onCancel);
   }
 
   return (
@@ -110,7 +227,7 @@ export default function PagesRibbon() {
         </button>
         <button
           className="tool-btn"
-          onClick={() => showToast("Drag any page card to reorder it")}
+          onClick={() => showToast("Press a page card and drag it — the line shows where it lands")}
           title="Reorder by dragging a page card"
         >
           {"↕"} Reorder
@@ -138,9 +255,10 @@ export default function PagesRibbon() {
         )}
       </div>
 
-      <div className="pg-grid">
+      <div className="pg-grid" ref={gridRef}>
         {plan.map((p, i) => {
           const selected = pageSelection.includes(i);
+          const isDragSrc = !!(drag && drag.moved && drag.from === i);
           return (
             <div
               key={p.key}
@@ -148,21 +266,11 @@ export default function PagesRibbon() {
                 "pg-card" +
                 (selected ? " selected" : "") +
                 (i === currentPage ? " current" : "") +
-                (i === overIndex ? " drop-over" : "")
+                (isDragSrc ? " dragging-src" : "")
               }
-              draggable
-              onDragStart={() => setDragIndex(i)}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setOverIndex(i);
-              }}
-              onDragLeave={() => setOverIndex(null)}
-              onDrop={() => onDrop(i)}
-              onClick={() => {
-                togglePageSelection(i);
-                setPage(i);
-              }}
-              title={selected ? "Click to deselect" : "Click to select"}
+              onPointerDown={(e) => startDrag(e, i)}
+              onDragStart={(e) => e.preventDefault()}
+              title={selected ? "Click to deselect · drag to reorder" : "Click to select · drag to reorder"}
             >
               <span className={"pg-check" + (selected ? " checked" : "")}>{"✓"}</span>
               <div className="pg-thumb">
@@ -202,6 +310,36 @@ export default function PagesRibbon() {
           );
         })}
       </div>
+
+      {/* The ghost that follows the cursor while dragging */}
+      {drag && drag.moved && (
+        <div
+          className="pg-ghost"
+          style={{
+            left: drag.x - drag.offsetX,
+            top: drag.y - drag.offsetY,
+            width: drag.width,
+            height: drag.height,
+          }}
+        >
+          <div className="pg-thumb" style={{ height: "calc(100% - 26px)" }}>
+            <img
+              src={thumbnailUrl(doc.file_id, plan[drag.from].sourceIndex)}
+              alt=""
+              draggable={false}
+              style={{ transform: `rotate(${plan[drag.from].rotation}deg)` }}
+            />
+          </div>
+          <span className="pg-name">Page {String(drag.from + 1).padStart(2, "0")}</span>
+        </div>
+      )}
+      {/* The drop-line: exactly where the page will land */}
+      {drag && drag.moved && drag.insert !== null && (
+        <div
+          className="pg-drop-line"
+          style={{ left: drag.lineX, top: drag.lineTop, height: drag.lineH }}
+        />
+      )}
 
       <input
         ref={insertRef}
