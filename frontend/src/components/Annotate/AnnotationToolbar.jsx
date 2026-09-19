@@ -1,12 +1,20 @@
 import { useState, useEffect, useRef } from "react";
 import { useDocument } from "../../store/useDocument";
 
+/* The classic single-line annotation toolbar (the pre-ribbon look) — now the
+ * Home tab. One row: History · Tools · Shapes · Ink · Text styles ·
+ * context line controls. All behavior from the previous rounds is
+ * unchanged; only the container (the ribbon tabs above it) is new. */
+
 const TOOLS = [
   { id: "select", label: "Select (Esc)", glyph: "\u2196" },
   { id: "highlight", label: "Highlight", glyph: "\u258D" },
   { id: "strike", label: "Strikethrough", glyph: "S" },
   { id: "pen", label: "Pen", glyph: "\u270E" },
   { id: "eraser", label: "Eraser - Click a mark to remove it", glyph: "\u232B" },
+];
+
+const MARK_TOOLS = [
   { id: "text", label: "Text box", glyph: "T" },
   { id: "edit-line", label: "Edit existing text", glyph: "\u270D" },
   { id: "note", label: "Sticky note", glyph: "\u25A4" },
@@ -68,7 +76,7 @@ const LINE_WIDTH_LABEL = { 1: "Thin", 2: "Regular", 3: "Thick", 4: "Extra thick"
 const HIGHLIGHT_OPACITIES = [0.15, 0.3, 0.5];
 const HIGHLIGHT_OPACITY_LABEL = { 0.15: "Light", 0.3: "Medium", 0.5: "Strong" };
 
-// TEXT color palette — the "A" button in the text cluster. Fully separate
+// TEXT color palette — the "A" button in the Text group. Fully separate
 // from the drawing-ink row above and from the background palette below, so
 // font color and background color are picked independently.
 const TEXT_COLORS = [
@@ -153,41 +161,26 @@ export default function AnnotationToolbar() {
       const refs = [shapeRef.current, bgRef.current, textColorRef.current, bulletRef.current];
       if (!refs.some((r) => r && r.contains(e.target))) openMenu("none");
     };
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [anyMenuOpen]);
-
-  // Keyboard: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redo, Esc =
-  // close open menus and go back to Select (tools now stay armed after
-  // placement, so Esc is the quick way out). Textareas/inputs keep the
-  // browser's own handling while focused.
-  useEffect(() => {
     const onKey = (e) => {
-      const t = e.target;
-      const inField = t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT" || t.isContentEditable);
-      if (e.key === "Escape" && !inField) {
-        openMenu("none");
-        setTool("select");
-        return;
-      }
-      if (!(e.ctrlKey || e.metaKey)) return;
-      const k = e.key.toLowerCase();
-      if (k !== "z" && k !== "y") return;
-      if (inField) return;
-      e.preventDefault();
-      if (k === "y" || e.shiftKey) redo();
-      else undo();
+      // Esc closes an open menu. (Esc -> Home + Select, and Ctrl/Cmd+Z /
+      // Shift+Z / Ctrl+Y, are handled globally by Ribbon.jsx so they work
+      // from any tab — not handled here, to avoid double-firing.)
+      if (e.key === "Escape") openMenu("none");
     };
+    document.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, setTool]);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [anyMenuOpen]);
 
   if (!doc) return null;
 
   const selected = annotations.find((a) => a.id === selectedId);
-  const activeShape = SHAPES.find((s) => s.id === shape) || SHAPES[0];
   const canUndo = history.past.length > 0;
   const canRedo = history.future.length > 0;
+  const activeShape = SHAPES.find((s) => s.id === shape) || SHAPES[0];
 
   // When a text box is selected, the text controls show AND act on THAT
   // box's own values (not the global "new box" defaults). Toggling was
@@ -223,9 +216,10 @@ export default function AnnotationToolbar() {
 
   return (
     <div className="annot-toolbar">
+      {/* ---------- History ---------- */}
       <div className="annot-tools">
         <button
-          className={`annot-tool ${canUndo ? "" : "disabled"}`}
+          className="annot-tool"
           title="Undo (Ctrl+Z)"
           disabled={!canUndo}
           onClick={undo}
@@ -233,17 +227,20 @@ export default function AnnotationToolbar() {
           <span className="glyph">{"\u21B6"}</span>
         </button>
         <button
-          className={`annot-tool ${canRedo ? "" : "disabled"}`}
+          className="annot-tool"
           title="Redo (Ctrl+Shift+Z)"
           disabled={!canRedo}
           onClick={redo}
         >
           <span className="glyph">{"\u21B7"}</span>
         </button>
+      </div>
 
-        <div className="annot-sep" />
+      <div className="annot-sep" />
 
-        {TOOLS.map((t) => (
+      {/* ---------- Tools + shapes ---------- */}
+      <div className="annot-tools">
+        {[...TOOLS, ...MARK_TOOLS].map((t) => (
           <button
             key={t.id}
             className={`annot-tool ${tool === t.id ? "active" : ""}`}
@@ -258,10 +255,7 @@ export default function AnnotationToolbar() {
           <button
             className={`annot-tool ${tool === "shape" ? "active" : ""}`}
             title="Shapes"
-            onClick={() => {
-              setShape(activeShape.id);
-              openMenu(shapeOpen ? "none" : "shape");
-            }}
+            onClick={() => openMenu(shapeOpen ? "none" : "shape")}
           >
             <span className="glyph">{activeShape.glyph}</span>
             <span className="caret">{"\u25BE"}</span>
@@ -288,9 +282,7 @@ export default function AnnotationToolbar() {
 
       <div className="annot-sep" />
 
-      {/* Drawing-ink row. With a DRAWING mark selected, recolors it; with
-          a text box selected it only changes the default ink — text color
-          is the "A" button in the text cluster below. */}
+      {/* ---------- Ink (drawing color) ---------- */}
       <div className="annot-colors">
         {COLORS.map((c) => (
           <button
@@ -307,71 +299,13 @@ export default function AnnotationToolbar() {
         </label>
       </div>
 
-      {showWidth && (
-        <>
-          <div className="annot-sep" />
-          <div className="width-group" title="Line thickness">
-            {LINE_WIDTHS.map((w) => (
-              <button
-                key={w}
-                className={`width-btn ${lineWidth === w ? "active" : ""}`}
-                title={LINE_WIDTH_LABEL[w]}
-                onClick={() => setLineWidth(w)}
-              >
-                <span className="width-sample" style={{ height: w }} />
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {showOpacity && (
-        <>
-          <div className="annot-sep" />
-          <div className="opacity-group" title="Highlight opacity">
-            {HIGHLIGHT_OPACITIES.map((o) => (
-              <button
-                key={o}
-                className={`opacity-btn ${Math.abs(highlightOpacity - o) < 0.001 ? "active" : ""}`}
-                title={HIGHLIGHT_OPACITY_LABEL[o]}
-                onClick={() => setHighlightOpacity(o)}
-              >
-                <span
-                  className="opacity-sample"
-                  style={{ background: `rgba(230, 194, 0, ${o})` }}
-                />
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-
-      {tool === "stamp" && (
-        <>
-          <div className="annot-sep" />
-          <select
-            className="stamp-select"
-            value={stampLabel}
-            title="Stamp text"
-            onChange={(e) => setStampLabel(e.target.value)}
-          >
-            {STAMP_LABELS.map((l) => (
-              <option key={l} value={l}>{l}</option>
-            ))}
-          </select>
-        </>
-      )}
-
-      {/* Text treatments — text color / background / Bold / Italic /
-          Underline / bullet / font / size / align. Shown at ALL times so
-          the Underline tool sits next to B and I no matter what you're
-          doing; with no text box selected the controls set the defaults
-          for new text boxes. Text color and background color are TWO
-          separate pickers here. */}
       <div className="annot-sep" />
+
+      {/* ---------- Text styles ---------- */}
       <div className="text-props">
-        {/* TEXT color ("A"). Separate picker: recolors the selected box,
-            or sets the ink for new boxes. Never touches the background. */}
+        {/* TEXT color ("A"). Separate picker: recolors the selected
+            box, or sets the ink for new boxes. Never touches the
+            background. */}
         <div className="prop-picker" ref={textColorRef}>
           <button
             className="text-color-btn"
@@ -402,9 +336,10 @@ export default function AnnotationToolbar() {
             </div>
           )}
         </div>
-        {/* BACKGROUND color. Separate picker: tint behind a plain text
-            box, or the patch an edited line paints over the old text —
-            match it to your page background so the edit blends in. */}
+        {/* BACKGROUND color. Separate picker: tint behind a plain
+            text box, or the patch an edited line paints over the old
+            text — match it to your page background so the edit
+            blends in. */}
         <div className="bg-picker" ref={bgRef}>
           <button
             className="bg-btn"
@@ -445,11 +380,10 @@ export default function AnnotationToolbar() {
           onChange={(e) => setTextStyle({ fontFamily: e.target.value })}
         >
           {/* FONTS is a list of GROUPS ({ group, list }) — each group
-              becomes an <optgroup> and each font an <option>. Mapping the
-              groups directly as <option> children makes React throw
-              "Objects are not valid as a React child" and takes down the
-              whole app (this is what closed the PDF on Text Box /
-              Edit Existing Text clicks). */}
+              becomes an <optgroup> and each font an <option>. Mapping
+              the groups directly as <option> children makes React
+              throw "Objects are not valid as a React child" and takes
+              down the whole app. */}
           {FONTS.map((g) => (
             <optgroup key={g.group} label={g.group}>
               {g.list.map((f) => (
@@ -519,33 +453,85 @@ export default function AnnotationToolbar() {
             </div>
           )}
         </div>
-          <select
-            className="size-select"
-            value={effSize}
-            title="Font size"
-            onChange={(e) => setTextStyle({ fontSize: Number(e.target.value) })}
-          >
-            {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <div className="align-group">
-            {[
-              { id: "left", glyph: "\u2630" },
-              { id: "center", glyph: "\u2632" },
-              { id: "right", glyph: "\u2631" },
-            ].map((al) => (
-              <button
-                key={al.id}
-                className={`text-btn ${effAlign === al.id ? "active" : ""}`}
-                title={`Align ${al.id}`}
-                onClick={() => setTextStyle({ align: al.id })}
-              >
-                {al.glyph}
-              </button>
-            ))}
-          </div>
+        <select
+          className="size-select"
+          value={effSize}
+          title="Font size"
+          onChange={(e) => setTextStyle({ fontSize: Number(e.target.value) })}
+        >
+          {[10, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <div className="align-group">
+          {[
+            { id: "left", glyph: "\u2630" },
+            { id: "center", glyph: "\u2632" },
+            { id: "right", glyph: "\u2631" },
+          ].map((al) => (
+            <button
+              key={al.id}
+              className={`text-btn ${effAlign === al.id ? "active" : ""}`}
+              title={`Align ${al.id}`}
+              onClick={() => setTextStyle({ align: al.id })}
+            >
+              {al.glyph}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {/* ---------- Line (context-aware: thickness / opacity / stamp) ---------- */}
+      {(showWidth || showOpacity || tool === "stamp") && (
+        <>
+          <div className="annot-sep" />
+          <div className="annot-tools">
+            {showWidth && (
+              <div className="width-group" title="Line thickness">
+                {LINE_WIDTHS.map((w) => (
+                  <button
+                    key={w}
+                    className={`width-btn ${lineWidth === w ? "active" : ""}`}
+                    title={LINE_WIDTH_LABEL[w]}
+                    onClick={() => setLineWidth(w)}
+                  >
+                    <span className="width-sample" style={{ height: w }} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {showOpacity && (
+              <div className="opacity-group" title="Highlight opacity">
+                {HIGHLIGHT_OPACITIES.map((o) => (
+                  <button
+                    key={o}
+                    className={`opacity-btn ${Math.abs(highlightOpacity - o) < 0.001 ? "active" : ""}`}
+                    title={HIGHLIGHT_OPACITY_LABEL[o]}
+                    onClick={() => setHighlightOpacity(o)}
+                  >
+                    <span
+                      className="opacity-sample"
+                      style={{ background: `rgba(230, 194, 0, ${o})` }}
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
+            {tool === "stamp" && (
+              <select
+                className="stamp-select"
+                value={stampLabel}
+                title="Stamp text"
+                onChange={(e) => setStampLabel(e.target.value)}
+              >
+                {STAMP_LABELS.map((l) => (
+                  <option key={l} value={l}>{l}</option>
+                ))}
+              </select>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
