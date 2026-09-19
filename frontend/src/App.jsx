@@ -10,7 +10,7 @@ import SplitBanner from "./components/SplitBanner";
 import Toast from "./components/Toast";
 
 export default function App() {
-  const { doc, loading } = useDocument();
+  const { doc, loading, ribbonTab } = useDocument();
 
   return (
     <div className="app">
@@ -20,7 +20,10 @@ export default function App() {
       <div className="workspace">
         {doc ? (
           <>
-            <ThumbnailRail />
+            {/* The left rail is the page navigator on every tab EXCEPT Pages,
+                where the ribbon's page strip is the preview — so there is
+                never two sets of thumbnails on screen at once. */}
+            {ribbonTab !== "pages" && <ThumbnailRail />}
             <PageCanvas />
             <CommentsPanel />
           </>
