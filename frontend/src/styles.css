@@ -1175,7 +1175,7 @@ button {
   position: absolute;
   top: 34px;
   left: -6px;
-  z-index: 40;
+  z-index: 60;
   background: var(--canvas);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1240,7 +1240,7 @@ button {
 .bullet-item.active { outline: 2px solid var(--accent); outline-offset: 1px; }
 .bullet-item .none-glyph { font-size: 11px; color: var(--muted, #6b6862); }
 
-/* ================= Ribbon (Word-style) ================= */
+/* ================= Ribbon (tabs + classic toolbar) ================= */
 
 .ribbon {
   flex-shrink: 0;
@@ -1270,76 +1270,60 @@ button {
   background: var(--canvas);
 }
 
+/* Body: each tab sizes itself (Home = the classic 48px toolbar row,
+   Pages = the page grid). overflow is VISIBLE on purpose — the dropdown
+   menus (shapes, bullet, colors) open downward over the page instead of
+   being clipped. */
 .ribbon-body {
   display: flex;
   align-items: stretch;
   background: var(--canvas);
-  padding: 8px 14px 4px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  min-height: 104px;
+  padding: 4px 12px;
 }
 
-/* Home ribbon: Word-style labeled groups */
-.home-ribbon { display: flex; align-items: stretch; }
-.ribbon-group {
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  gap: 5px;
-  padding: 4px 14px 2px;
-  border-right: 1px solid var(--border);
+/* Home tab = the classic single-line toolbar. It used to be its own row
+ * with its own background/border; inside the ribbon it goes transparent
+ * so the ribbon's chrome shows through once. */
+/* Home tab = the classic single-line toolbar. It used to be its own row
+ * with its own background/border; inside the ribbon it goes transparent
+ * so the ribbon's chrome shows through once. On narrow screens the row
+ * WRAPS (instead of pushing the whole page wide). */
+.ribbon-body .annot-toolbar {
+  height: auto;
+  min-height: 48px;
+  flex-wrap: wrap;
   flex-shrink: 0;
+  background: transparent;
+  border-bottom: none;
+  padding: 0 6px 4px;
 }
-.home-ribbon .ribbon-group:last-child { border-right: none; }
-.group-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-soft);
-  text-align: center;
-  white-space: nowrap;
-}
-.group-controls { display: flex; align-items: center; gap: 4px; }
 
-/* 2-col and 3-col tool grids (Draw, Text & Marks, Shapes) */
-.tool-grid { display: grid; gap: 4px; }
-.tool-grid.g2 { grid-template-columns: repeat(2, 40px); }
-.tool-grid.g3 { grid-template-columns: repeat(3, 34px); }
-.tool-grid .annot-tool { width: 100%; height: 32px; font-size: 14px; }
-.tool-grid .annot-tool.sm { width: 32px; }
-
-/* Ink group: 5 swatches per row + custom picker */
-.ink-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 20px);
-  gap: 7px 6px;
-  align-items: center;
-  padding: 6px 4px;
-}
-.ink-grid .color-picker { width: 20px; height: 20px; margin-left: 0; }
-
-/* Text group: two compact rows */
-.text-style { display: flex; flex-direction: column; gap: 4px; justify-content: flex-end; }
-.ts-row { display: flex; align-items: center; gap: 4px; }
-.ts-row .font-select { max-width: 118px; }
-.line-controls { flex-wrap: wrap; }
-
-/* Small undo/redo buttons in the History group */
-.annot-tool.sm { width: 30px; height: 30px; }
-.annot-tool.sm:disabled { opacity: 0.35; cursor: default; }
+/* Popovers inside the ribbon sit above the page area */
+.ribbon .shape-menu,
+.ribbon .prop-menu { z-index: 60; }
 
 /* ---- Pages ribbon tab ---- */
+/* width:100% + min-width:0 are the critical part: the filmstrip can be
+   thousands of px wide for big PDFs, and without these the whole document
+   would become horizontally scrollable instead of the strip scrolling
+   inside itself. */
 .pages-ribbon {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
   padding: 6px 2px 4px;
 }
 .pg-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pg-actions .tool-btn { border: 1px solid var(--border); background: var(--canvas); }
-.pg-actions .tool-btn.danger:hover { background: #f6e4e1; color: var(--danger); }
+/* Higher-specificity overrides so the outlined look above can't erase the
+   .primary green (that made "Save changes" invisible until you hovered it). */
+.pg-actions .tool-btn:hover:not(:disabled) { background: var(--field); color: var(--ink); }
+.pg-actions .tool-btn.danger:hover:not(:disabled) { background: #f6e4e1; color: var(--danger); }
+.pg-actions .tool-btn:disabled { opacity: 0.45; cursor: default; }
+.pg-actions .tool-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pg-actions .tool-btn.primary:hover:not(:disabled) { background: #0c574f; color: #fff; }
 .pg-count {
   margin-left: auto;
   color: var(--ink-soft);
@@ -1347,23 +1331,72 @@ button {
   white-space: nowrap;
 }
 .pg-count b { color: var(--ink); }
+/* Horizontal filmstrip (Google-Docs style): always exactly ONE row tall,
+   cards at a fixed width, horizontal scroll for long documents — so 7
+   pages or 300 pages never leaves a big empty area. */
+/* Horizontal filmstrip (Google-Docs style): always exactly ONE row tall,
+   cards at a fixed width, horizontal scroll for long documents — so 7
+   pages or 300 pages never leaves a big empty area. The visible scrollbar
+   is the "swipe left / swipe right as much as you want" affordance. */
 .pg-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  display: flex;
   gap: 10px;
-  max-height: 330px;
-  overflow-y: auto;
-  padding: 4px 2px 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 4px 2px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
 }
+.pg-grid::-webkit-scrollbar { height: 10px; }
+.pg-grid::-webkit-scrollbar-track { background: transparent; }
+.pg-grid::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+.pg-grid::-webkit-scrollbar-thumb:hover { background: var(--ink-soft); }
 .pg-card {
   position: relative;
+  flex: 0 0 132px;
+  width: 132px;
   background: #fff;
   border: 2px solid transparent;
   border-radius: 10px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-  cursor: pointer;
+  cursor: grab;
   overflow: hidden;
   user-select: none;
+}
+.pg-card:active { cursor: grabbing; }
+/* The card being dragged: stays in place as a faded placeholder */
+.pg-card.dragging-src { opacity: 0.45; border-style: dashed; border-color: var(--accent); }
+/* The copy that follows the cursor */
+.pg-ghost {
+  position: fixed;
+  z-index: 120;
+  pointer-events: none;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  transform: rotate(1.5deg);
+}
+.pg-ghost .pg-thumb { padding: 8px; }
+.pg-ghost .pg-name {
+  position: absolute;
+  left: 8px;
+  bottom: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+/* The line showing exactly where the page will land */
+.pg-drop-line {
+  position: fixed;
+  z-index: 110;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+  pointer-events: none;
 }
 .pg-card:hover { border-color: var(--border); }
 .pg-card.current { box-shadow: 0 0 0 2px var(--accent-soft), 0 1px 4px rgba(0, 0, 0, 0.08); }
