@@ -1,77 +1,112 @@
 import { useRef } from "react";
 import { useDocument } from "../../store/useDocument";
-import { exportAnnotated } from "../../api/client";
 
-/* Word-style title bar: brand, document name, document-level actions.
- * Per-page + annotation controls live in the Ribbon below. */
+/* Slim Word-style title bar: brand, document name, and the document-level
+ * actions (clear / save / export marks, close, open). Page-level actions
+ * (merge, split, reorder, ...) live on the Pages ribbon tab. */
 export default function TitleBar() {
   const {
-    doc, loading, saving, annotationsDirty,
-    clearAnnotations, save, reset, showToast,
+    doc,
+    load,
+    reset,
+    hasAnnotations,
+    isAnnotationsDirty,
+    saveAnnotations,
+    exportAnnotated,
+    clearAnnotations,
+    saving,
+    showToast,
   } = useDocument();
   const openRef = useRef(null);
 
   async function handleExport() {
-    if (!doc) return;
+    const flatId = await exportAnnotated();
+    if (!flatId) return; // the store already surfaced the error as a toast
+    // Download via blob: a plain anchor click can silently do nothing in
+    // some browsers (no Content-Disposition, popup blockers), which is
+    // what made Export look dead. Fetching the bytes and using an object
+    // URL always triggers the download — and a failed fetch is reported.
     try {
-      const { annotations, layerId } = useDocument.getState();
-      const res = await exportAnnotated(doc.file_id, annotations, layerId);
+      const res = await fetch(`/api/documents/${flatId}/raw`);
+      if (!res.ok) throw new Error(`server responded ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = "annotated.pdf";
+      document.body.appendChild(a);
       a.click();
+      a.remove();
       URL.revokeObjectURL(url);
-      showToast("Exported PDF downloaded");
+      showToast("Exported - Download Starting");
     } catch (e) {
-      showToast("Export failed: " + e.message, "error");
+      showToast("Exported, but the download failed: " + e.message, "error");
     }
   }
 
-  return (
-    <div className="toolbar">
-      <div className="brand">PDF Editor</div>
+  const hasAnnots = hasAnnotations();
+  const annotsDirty = isAnnotationsDirty();
 
+  return (
+    <header className="toolbar">
+      <div className="brand">
+        PDF<span>Editor</span>
+      </div>
       {doc && (
-        <div className="doc-name" title={doc.filename}>
+        <div className="doc-name">
           {doc.filename}
-          <span className="doc-meta">{doc.page_count} page{doc.page_count === 1 ? "" : "s"}</span>
+          <span className="doc-meta">
+            {" "}
+            · {doc.page_count} page{doc.page_count === 1 ? "" : "s"}
+          </span>
         </div>
       )}
-
       <div className="spacer" />
 
       {doc && (
         <>
-          <button className="tool-btn" onClick={clearAnnotations} disabled={saving}
-            title="Remove every mark from the current view (undo-able)">
-            Clear marks
-          </button>
-          <button className="tool-btn" onClick={handleExport} disabled={saving}
-            title="Download a copy of this file with your marks burned in">
-            Export PDF
-          </button>
-          <button
-            className={`tool-btn ${annotationsDirty ? "primary" : ""}`}
-            onClick={save}
-            disabled={saving || !annotationsDirty}
-            title={annotationsDirty ? "Save your marks so they survive a reload" : "Your marks are saved"}
-          >
-            {saving ? "Saving..." : annotationsDirty ? "Save marks" : "Marks saved"}
+          {hasAnnots && (
+            <>
+              <button className="tool-btn" onClick={clearAnnotations} disabled={saving}>
+                Clear marks
+              </button>
+              <button
+                className="tool-btn"
+                onClick={handleExport}
+                disabled={saving}
+                title="Download a flattened copy with marks burned in"
+              >
+                Export PDF
+              </button>
+              {annotsDirty ? (
+                <button
+                  className="tool-btn primary"
+                  onClick={saveAnnotations}
+                  disabled={saving}
+                  title="Save marks (they stay editable when you reopen)"
+                >
+                  {saving ? "Saving..." : "Save marks"}
+                </button>
+              ) : (
+                <span className="saved-tag">Marks saved</span>
+              )}
+            </>
+          )}
+
+          {!hasAnnots && <span className="saved-tag">Saved</span>}
+
+          <div className="tool-sep" />
+          <button className="tool-btn" onClick={reset} disabled={saving}>
+            Close
           </button>
         </>
       )}
 
       <button
-        className="tool-btn"
-        onClick={() => reset()}
-        title="Close the current document (saved marks stay attached to the file)"
+        className="tool-btn primary"
+        onClick={() => openRef.current?.click()}
       >
-        Close
-      </button>
-      <button className="tool-btn primary" onClick={() => openRef.current?.click()} disabled={loading}>
-        {loading ? "Opening..." : "Open PDF"}
+        Open PDF
       </button>
 
       <input
@@ -79,11 +114,8 @@ export default function TitleBar() {
         type="file"
         accept="application/pdf"
         hidden
-        onChange={(e) => {
-          if (e.target.files?.[0]) useDocument.getState().load(e.target.files[0]);
-          e.target.value = "";
-        }}
+        onChange={(e) => e.target.files?.[0] && load(e.target.files[0])}
       />
-    </div>
+    </header>
   );
 }
